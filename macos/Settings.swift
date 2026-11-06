@@ -760,7 +760,7 @@ struct SettingsDetail: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Brand.canvas)
+        // Lo sfondo di marchio sta sotto tutta la finestra (anche dietro la barra laterale).
         .tint(Brand.accent)
     }
 }
@@ -807,7 +807,22 @@ final class SettingsWindowController {
                          styleMask: [.titled, .closable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         w.title = "Impostazioni"
-        w.contentViewController = split
+        // Sfondo di marchio sotto tutta la finestra, come nella finestra principale.
+        let root = NSViewController()
+        root.view = NSView()
+        let backdrop = NSHostingView(rootView: BrandBackground())
+        root.addChild(split)
+        for v in [backdrop, split.view] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            root.view.addSubview(v)
+            NSLayoutConstraint.activate([
+                v.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+                v.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+                v.topAnchor.constraint(equalTo: root.view.topAnchor),
+                v.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+            ])
+        }
+        w.contentViewController = root
         // Toolbar vuota e non personalizzabile: dà la barra del titolo unificata sopra la barra laterale.
         let toolbar = NSToolbar(identifier: "SettingsToolbar")
         toolbar.allowsUserCustomization = false
