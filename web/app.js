@@ -484,6 +484,7 @@ async function openDebate(id) {
   participants = meta ? JSON.parse(meta.content) : [];
   for (const m of d.messages) {
     if (m.model_id === "_meta") continue;
+    if (m.model_id === "_note") { phaseEl(m.phase, m.content || ""); continue; }
     if (m.phase === "verdict") continue;
     fillCard(m.phase, m.model_id, m.content || "", m.ms, m.error);
   }

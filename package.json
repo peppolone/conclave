@@ -12,7 +12,8 @@
     "check": "node --disable-warning=ExperimentalWarning src/check.ts",
     "typecheck": "tsc --noEmit",
     "app": "zsh scripts/build-app.sh",
-    "app:install": "zsh scripts/build-app.sh --install"
+    "app:install": "zsh scripts/build-app.sh --install",
+    "test:chaos": "node tests/chaos/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -13,6 +13,8 @@ interface Running {
   controller: AbortController;
 }
 const running = new Map<number, Running>();
+/** Oltre questo numero il dibattito diventa lento e consuma quote senza aggiungere idee nuove. */
+const MAX_PARTICIPANTS = 10;
 
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku"];
 const DEFAULT_ROUNDS: Rounds = 3;
@@ -30,13 +32,19 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+/** Errore dovuto alla richiesta del client: diventa una risposta 4xx, non un 500. */
+class BadRequest extends Error {
+  status: number;
+  constructor(status: number, message: string) { super(message); this.status = status; }
+}
+
 async function readBody(req: IncomingMessage): Promise<unknown> {
   let s = "";
   for await (const chunk of req) {
     s += chunk;
-    if (s.length > 100_000) throw new Error("richiesta troppo grande");
+    if (s.length > 100_000) throw new BadRequest(413, "richiesta troppo grande");
   }
-  return JSON.parse(s || "{}");
+  try { return JSON.parse(s || "{}"); } catch { throw new BadRequest(400, "JSON non valido"); }
 }
 
 function send(r: Running, e: DebateEvent) {
@@ -120,11 +128,16 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const body = (await readBody(req)) as {
       question?: string; models?: string[]; rounds?: unknown; claudeModel?: unknown; judge?: unknown; parentId?: unknown;
     };
+    if (body === null || typeof body !== "object" || Array.isArray(body)) return json(res, 400, { error: "corpo della richiesta non valido" });
+    if (body.models !== undefined && !Array.isArray(body.models)) return json(res, 400, { error: "models deve essere un elenco" });
     const question = String(body.question ?? "").trim();
-    const defs = (body.models ?? []).map(findModel).filter((m) => m && isAvailable(m)) as NonNullable<ReturnType<typeof findModel>>[];
+    if (question.length > 20_000) return json(res, 400, { error: "domanda troppo lunga (max 20.000 caratteri)" });
+    // Id duplicati ignorati: lo stesso modello due volte non aggiunge una voce nuova.
+    const ids = [...new Set((body.models ?? []).filter((x): x is string => typeof x === "string"))];
+    const defs = ids.map(findModel).filter((m) => m && isAvailable(m)) as NonNullable<ReturnType<typeof findModel>>[];
     if (!question) return json(res, 400, { error: "domanda vuota" });
     if (defs.length < 2) return json(res, 400, { error: "seleziona almeno 2 modelli disponibili" });
-    if (defs.length > 6) return json(res, 400, { error: "massimo 6 modelli" });
+    if (defs.length > MAX_PARTICIPANTS) return json(res, 400, { error: `massimo ${MAX_PARTICIPANTS} partecipanti` });
 
     const rounds = body.rounds ?? DEFAULT_ROUNDS;
     if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0 || rounds > 3) {
@@ -218,7 +231,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
 createServer((req, res) => {
   handle(req, res).catch((e) => {
-    if (!res.headersSent) json(res, 500, { error: (e as Error).message });
+    if (!res.headersSent) json(res, e instanceof BadRequest ? e.status : 500, { error: (e as Error).message });
     else res.end();
   });
 }).listen(PORT, "127.0.0.1", function (this: import("node:net").Server) {

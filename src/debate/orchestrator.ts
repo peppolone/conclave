@@ -42,7 +42,7 @@ interface Debater {
   final?: string;
 }
 
-const LETTERS = "ABCDEFGH";
+const LETTERS = "ABCDEFGHIJKL";
 
 /** Tempo massimo per un intervento (riserve e attese comprese): oltre, il modello salta il round. */
 const PARTICIPANT_BUDGET_MS = 75_000;
@@ -119,6 +119,11 @@ export async function runDebate(
     // Fase iniziale: risposte indipendenti.
     await phase("initial", () => P.initialPrompt(question, parent), (d, t) => (d.initial = t));
 
+    if (opts.rounds >= 1 && alive().length < 2) {
+      // Da soli non si discute: si va direttamente al verdetto, e lo si dice.
+      emit({ type: "phase", phase: "critique", note: "Round saltati: ha risposto un solo modello, non c'è nessuno con cui discutere." });
+      saveMessage(debateId, { model_id: "_note", phase: "critique", content: "Round saltati: ha risposto un solo modello.", error: null, ms: null });
+    }
     if (opts.rounds >= 1 && alive().length >= 2) {
       // Round 1: critica incrociata. L'avvocato del diavolo è scelto a caso.
       const devil = alive()[Math.floor(Math.random() * alive().length)];
