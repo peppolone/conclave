@@ -10,8 +10,6 @@ enum Brand {
     static let blue = Color(red: 0x6b / 255, green: 0x8c / 255, blue: 0xff / 255)
     static let green = Color(red: 0x47 / 255, green: 0xcd / 255, blue: 0x89 / 255)
     static let amber = Color(red: 0xf5 / 255, green: 0xb5 / 255, blue: 0x44 / 255)
-    /// Blu notte dell'icona.
-    static let navy = Color(red: 0x2b / 255, green: 0x3a / 255, blue: 0x63 / 255)
 
     /// Colore d'accento dell'app (pulsanti principali, selezioni del marchio).
     static let accent = Color(nsColor: NSColor(name: "BrandAccent") { a in

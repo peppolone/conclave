@@ -586,7 +586,9 @@ private struct MarkdownTableView: View {
                 table(widths)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // minWidth 0: la cornice prende la larghezza offerta dalla card, non quella della tabella,
+        // così la misura è quella disponibile e la tabella non esce dal riquadro.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
     }
 

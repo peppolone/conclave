@@ -297,7 +297,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         // Sfondo coerente con il marchio (si vede durante l'avvio e dietro la toolbar);
         // la barra laterale resta il vetro di sistema.
         window.backgroundColor = NSColor(Brand.canvas)
-        window.contentViewController = split
+        // Sfondo di marchio sotto tutta la finestra: si vede anche dietro e intorno alla barra
+        // laterale (vetro di sistema), senza stacchi tra barra e contenuto.
+        let windowRoot = NSViewController()
+        windowRoot.view = NSView()
+        let backdrop = NSHostingView(rootView: BrandBackground())
+        windowRoot.addChild(split)
+        for v in [backdrop, split.view] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            windowRoot.view.addSubview(v)
+            NSLayoutConstraint.activate([
+                v.leadingAnchor.constraint(equalTo: windowRoot.view.leadingAnchor),
+                v.trailingAnchor.constraint(equalTo: windowRoot.view.trailingAnchor),
+                v.topAnchor.constraint(equalTo: windowRoot.view.topAnchor),
+                v.bottomAnchor.constraint(equalTo: windowRoot.view.bottomAnchor),
+            ])
+        }
+        window.contentViewController = windowRoot
         // Toolbar unificata: i pulsanti fluttuano su Liquid Glass sopra il contenuto.
         let toolbar = NSToolbar(identifier: "MainToolbar")
         toolbar.delegate = self

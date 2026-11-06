@@ -22,7 +22,7 @@ struct ContentRoot: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(BrandBackground())
+        // Lo sfondo di marchio sta sotto tutta la finestra (main.swift): qui niente sfondo opaco.
         .tint(Brand.accent)
     }
 }
@@ -727,13 +727,8 @@ struct DebateView: View {
         let state = store.phaseState(p, in: debate)
         return DisclosureGroup(isExpanded: binding) {
             if !p.cards.isEmpty {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12, alignment: .top)],
-                          alignment: .leading, spacing: 12) {
-                    ForEach(p.cards) { c in
-                        CardView(card: c, running: debate.isRunning, since: p.startedAt)
-                    }
-                }
-                .padding(.top, 10)
+                CardsGrid(cards: p.cards, running: debate.isRunning, since: p.startedAt)
+                    .padding(.top, 10)
             }
         } label: {
             PhaseHeader(heading: store.phaseHeading(p.id, in: debate),
@@ -940,6 +935,34 @@ private struct StepsRow: View {
 
 // MARK: - Card di un modello
 
+/// Card di un round su due colonne (una se la finestra è stretta). A differenza di LazyVGrid
+/// le card della stessa riga hanno la stessa altezza: niente vuoti sotto la più corta.
+private struct CardsGrid: View {
+    let cards: [CardState]
+    let running: Bool
+    let since: Date?
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        let cols = width >= 652 ? 2 : 1
+        let rows = stride(from: 0, to: cards.count, by: cols).map { Array(cards[$0..<min($0 + cols, cards.count)]) }
+        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
+            ForEach(rows.indices, id: \.self) { i in
+                GridRow {
+                    ForEach(rows[i]) { c in
+                        CardView(card: c, running: running, since: since)
+                    }
+                    if rows[i].count < cols {
+                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
 private struct CardView: View {
     let card: CardState
     let running: Bool
@@ -1022,7 +1045,8 @@ private struct CardView: View {
             }
         }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        // maxHeight: nella griglia le card della stessa riga hanno la stessa altezza.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .surfaceBox(radius: 12)
         .contextMenu {
             if let text = card.text {
