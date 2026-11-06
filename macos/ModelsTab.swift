@@ -157,6 +157,16 @@ final class ModelsModel: ObservableObject {
         checking = r.checking ?? false
     }
 
+    /// "Aggiorna stato": il motore riprova davvero ogni voce; si rilegge lo stato finché il controllo è in corso.
+    func recheckHealth() async {
+        _ = try? await send("POST", "/api/health", body: Data("{}".utf8))
+        for _ in 0..<45 {
+            await refreshHealth()
+            if !checking { break }
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
     /// Catalogo del provider scelto nella sezione "Aggiungi una voce".
     var catalog: [CatalogItem] { catalogs[provider] ?? [] }
 
@@ -502,7 +512,7 @@ struct ModelsTab: View {
                     ProgressView().controlSize(.small)
                     Text("Verifica dei modelli in corso…").foregroundStyle(.secondary)
                 }
-                Button("Aggiorna stato") { Task { await model.refreshHealth() } }
+                Button("Aggiorna stato") { Task { await model.recheckHealth() } }
             }
 
             SettingsRow("Scelta automatica all'avvio",
