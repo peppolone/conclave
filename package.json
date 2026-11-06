@@ -1,0 +1,21 @@
+{
+  "name": "ai-council",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Consiglio di AI locale: più modelli discutono in 3 round, Claude giudica.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.ts",
+    "check": "node --disable-warning=ExperimentalWarning src/check.ts",
+    "typecheck": "tsc --noEmit",
+    "app": "zsh scripts/build-app.sh",
+    "app:install": "zsh scripts/build-app.sh --install"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

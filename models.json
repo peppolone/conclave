@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "gemini":     { "name": "Google Gemini", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "keyEnv": "GEMINI_API_KEY", "extraBody": { "reasoning_effort": "low" } },
+    "groq":       { "name": "Groq",          "baseUrl": "https://api.groq.com/openai/v1", "keyEnv": "GROQ_API_KEY" },
+    "openrouter": { "name": "OpenRouter",    "baseUrl": "https://openrouter.ai/api/v1", "keyEnv": "OPENROUTER_API_KEY" },
+    "cerebras":   { "name": "Cerebras",      "baseUrl": "https://api.cerebras.ai/v1", "keyEnv": "CEREBRAS_API_KEY" },
+    "mistral":    { "name": "Mistral",       "baseUrl": "https://api.mistral.ai/v1", "keyEnv": "MISTRAL_API_KEY" },
+    "openai":     { "name": "OpenAI",        "baseUrl": "https://api.openai.com/v1", "keyEnv": "OPENAI_API_KEY" }
+  },
+  "judge": { "id": "claude", "label": "Claude", "kind": "claude-cli", "model": "sonnet" },
+  "models": [
+    { "id": "claude",   "label": "Claude",        "kind": "claude-cli", "model": "sonnet", "default": false },
+    { "id": "gemini",   "label": "Gemini Flash",  "kind": "openai", "provider": "gemini",     "model": "gemini-3.8-flash", "fallback": ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemma-4-31b-it"], "default": true },
+    { "id": "gptoss",   "label": "GPT-OSS 120B",  "kind": "openai", "provider": "groq",       "model": "openai/gpt-oss-120b", "default": true },
+    { "id": "llama",    "label": "Llama 3.3 70B", "kind": "openai", "provider": "groq",       "model": "llama-3.3-70b-versatile", "default": false },
+    { "id": "kimi",     "label": "Kimi K2",       "kind": "openai", "provider": "groq",       "model": "moonshotai/kimi-k2-instruct", "default": false },
+    { "id": "deepseek", "label": "DeepSeek",      "kind": "openai", "provider": "openrouter", "model": "deepseek/deepseek-chat-v3-0324:free", "default": true },
+    { "id": "mistral",  "label": "Mistral Small", "kind": "openai", "provider": "mistral",    "model": "mistral-small-latest", "default": false }
+  ]
+}
