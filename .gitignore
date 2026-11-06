@@ -3,3 +3,16 @@ node_modules/
 data/
 dist/
 .DS_Store
+.env.*
+!.env.example
+selection.json
+health.json
+*.db
+*.db-*
+*.log
+*.app
+.build/
+DerivedData/
+xcuserdata/
+CLAUDE.local.md
+.claude/settings.local.json
