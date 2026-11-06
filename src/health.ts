@@ -65,19 +65,6 @@ function voiceFamily(m: ModelDef): string {
 
 const MAX_REPLACEMENT_PROBES = 4;
 
-/** Nome leggibile per un modello del catalogo (alcuni provider danno solo l'id). */
-export function prettyName(name: string | undefined, id: string): string {
-  if (name && name !== id) return name.replace(/\s*\(free\)\s*$/i, "").slice(0, 40);
-  const last = id.split("/").pop() ?? id;
-  return last
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((w) => (/^\d+(\.\d+)?b$/i.test(w) ? w.toUpperCase() : /^(gpt|oss)$/i.test(w) ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
-    .join(" ")
-    .replace(/^GPT OSS/, "GPT-OSS")
-    .slice(0, 40);
-}
-
 /** Aggiorna in modo permanente un membro del consiglio il cui modello è stato ritirato. */
 function replaceForever(m: ModelDef, model: string, label: string): void {
   m.model = model;

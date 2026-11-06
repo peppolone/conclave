@@ -20,7 +20,7 @@ xcrun swiftc -O "${SOURCES[@]}" -o "$APP/Contents/MacOS/AICouncil" \
   -framework AppKit
 
 echo "→ Copia del motore"
-cp -R "$ROOT/src" "$ROOT/web" "$APP/Contents/Resources/server/"
+cp -R "$ROOT/src" "$APP/Contents/Resources/server/"
 cp "$ROOT/models.json" "$ROOT/.env.example" "$ROOT/package.json" "$APP/Contents/Resources/server/"
 
 echo "→ Icona"

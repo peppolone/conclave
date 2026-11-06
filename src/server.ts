@@ -1,7 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
-import { join, extname, normalize } from "node:path";
-import { config, isAvailable, findModel, PORT, ROOT, selection, validateSelection, saveSelection } from "./config.ts";
+import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection } from "./config.ts";
 import { createDebate, listDebates, getDebate, deleteDebate } from "./db.ts";
 import { runDebate, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
 import { listCatalog, probe } from "./catalog.ts";
@@ -19,13 +17,6 @@ const MAX_PARTICIPANTS = 10;
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku"];
 const DEFAULT_ROUNDS: Rounds = 3;
 const DEFAULT_JUDGE = "claude";
-
-const WEB = join(ROOT, "web");
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-};
 
 function json(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -212,20 +203,6 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     }
   }
 
-  // File statici dell'interfaccia.
-  if (req.method === "GET" && !path.startsWith("/api/")) {
-    const rel = normalize(path === "/" ? "/index.html" : path).replace(/^(\.\.[/\\])+/, "");
-    const file = join(WEB, rel);
-    if (!file.startsWith(WEB)) return json(res, 403, { error: "vietato" });
-    try {
-      const data = await readFile(file);
-      res.writeHead(200, { "Content-Type": MIME[extname(file)] ?? "application/octet-stream" });
-      return res.end(data);
-    } catch {
-      return json(res, 404, { error: "non trovato" });
-    }
-  }
-
   json(res, 404, { error: "non trovato" });
 }
 
@@ -240,7 +217,7 @@ createServer((req, res) => {
   const on = config.models.filter(isAvailable).map((m) => m.label);
   // Riga letta dall'app Mac per sapere su quale porta collegarsi (PORT=0 = porta libera a caso).
   console.log(`COUNCIL_PORT=${port}`);
-  console.log(`AI Council pronto su http://localhost:${port}`);
+  console.log(`Motore AI Council pronto su http://localhost:${port} (solo API)`);
   console.log(`Modelli disponibili (${on.length}): ${on.join(", ")}`);
   // Controllo all'avvio in background: l'interfaccia mostra lo stato man mano.
   runHealthCheck().then(() => {
