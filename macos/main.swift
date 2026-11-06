@@ -2,7 +2,6 @@
 // Avvia il motore Node incluso nel bundle e ne mostra l'interfaccia in una finestra nativa.
 
 import AppKit
-import WebKit
 import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
@@ -154,14 +153,16 @@ final class ServerController {
 // MARK: - Finestra
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSToolbarDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate {
     private var window: NSWindow!
-    private var webView: WKWebView!
+    /// Contenuto nativo SwiftUI (composer e dibattito).
+    private var content: NSView!
     private var loading: NSView!
     private var status: NSTextField!
     private let server = ServerController()
     private lazy var settings = SettingsWindowController(port: { [weak self] in self?.port ?? 0 })
     private lazy var sidebar = SidebarModel(port: { [weak self] in self?.port ?? 0 })
+    private lazy var store = CouncilStore(port: { [weak self] in self?.port ?? 0 })
     private var port = 0
     /// Verdetti arrivati mentre l'app era in secondo piano (badge del Dock).
     private var unreadVerdicts = 0
@@ -180,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         server.onReady = { [weak self] port in
             guard let self else { return }
             self.port = port
-            self.webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
+            self.engineReady()
         }
         server.onCrash = { [weak self] message in self?.showCrash(message) }
         server.start()
@@ -204,15 +205,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     private func buildWindow() {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
-        // Ponte pagina → app: window.webkit.messageHandlers.council.postMessage(...)
-        config.userContentController.add(self, name: "council")
-        webView = WKWebView(frame: .zero, configuration: config)
-        webView.uiDelegate = self
-        webView.navigationDelegate = self
-        webView.setValue(false, forKey: "drawsBackground") // evita il lampo bianco in modalità scura
-        webView.isHidden = true
+        // Contenuto della finestra interamente nativo (SwiftUI).
+        let root = ContentRoot(
+            store: store,
+            openSettings: { [weak self] in self?.openSettings(nil) },
+            openModels: { [weak self] in self?.seedSettings(); self?.settings.show(tab: .models) },
+            saveFile: { [weak self] name, text in self?.saveMarkdown(filename: name, text: text) })
+        content = NSHostingView(rootView: root)
+        content.isHidden = true
+        store.onHistoryChanged = { [weak self] in self?.sidebar.reload() }
+        store.onCurrentChanged = { [weak self] id in self?.sidebar.selected = id }
+        store.onVerdictReady = { [weak self] q in
+            self?.verdictReady(title: "Verdetto pronto", body: q.count > 80 ? String(q.prefix(80)) + "…" : q)
+        }
 
         status = NSTextField(labelWithString: "Avvio del consiglio…")
         status.textColor = .secondaryLabelColor
@@ -226,16 +231,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
         // Area del contenuto: la pagina parte sotto la toolbar (safe area), il vetro resta alla navigazione.
         let container = NSView()
-        for v in [webView!, loading!] {
+        for v in [content!, loading!] {
             v.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(v)
         }
         let safe = container.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            webView.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: safe.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
+            content.topAnchor.constraint(equalTo: safe.topAnchor),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             loading.centerXAnchor.constraint(equalTo: safe.centerXAnchor),
             loading.centerYAnchor.constraint(equalTo: safe.centerYAnchor),
         ])
@@ -244,11 +249,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
         // Barra laterale nativa: su macOS 26 diventa automaticamente un pannello Liquid Glass.
         sidebar.onOpen = { [weak self] id in
-            self?.webView.evaluateJavaScript("window.council?.open(\(id))")
+            guard let self else { return }
+            Task { await self.store.open(id) }
         }
-        sidebar.onDeleted = { [weak self] id in
-            self?.webView.evaluateJavaScript("window.council?.deleted(\(id))")
-        }
+        sidebar.onDeleted = { [weak self] id in self?.store.deleted(id) }
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: NSHostingController(rootView: SidebarView(model: sidebar)))
         sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 380
@@ -282,7 +286,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     private func showCrash(_ message: String) {
-        webView.isHidden = true
+        content.isHidden = true
+        store.engineStopped()
         loading.isHidden = false
         status.stringValue = "Motore non attivo"
         let alert = NSAlert()
@@ -355,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     @objc func newDebate(_ sender: Any?) {
         sidebar.selected = nil
-        webView.evaluateJavaScript("window.council ? window.council.newDiscussion() : document.getElementById('new-btn')?.click()")
+        store.newDiscussion()
     }
 
     @objc func toggleSidebar(_ sender: Any?) {
@@ -396,43 +401,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     @objc func exportDebate(_ sender: Any?) {
-        // Solo se la barra azioni è visibile, cioè c'è un verdetto da esportare.
-        webView.evaluateJavaScript("document.querySelector('#actions:not([hidden]) [data-action=\"export\"]')?.click()")
+        // Solo se c'è un verdetto da esportare.
+        guard store.current?.verdict != nil, let e = store.exportMarkdown() else { NSSound.beep(); return }
+        saveMarkdown(filename: e.filename, text: e.text)
     }
 
-    @objc func reload(_ sender: Any?) { webView.reload() }
+    @objc func reload(_ sender: Any?) {
+        Task { await store.reloadModels() }
+        sidebar.reload()
+        if let id = store.current?.id { Task { await store.open(id) } }
+    }
 
     @objc func openSettings(_ sender: Any?) {
         seedSettings()
         settings.show()
-    }
-
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "council" else { return }
-        if let cmd = message.body as? String {
-            if cmd == "openSettings" { openSettings(nil) }
-            if cmd == "openModels" { seedSettings(); settings.show(tab: .models) }
-            return
-        }
-        guard let msg = message.body as? [String: Any], let type = msg["type"] as? String else { return }
-        switch type {
-        case "copy":
-            guard let text = msg["text"] as? String else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-        case "save":
-            guard let filename = msg["filename"] as? String, let text = msg["text"] as? String else { return }
-            saveMarkdown(filename: filename, text: text)
-        case "done":
-            guard let title = msg["title"] as? String, let body = msg["body"] as? String else { return }
-            verdictReady(title: title, body: body)
-        case "history":
-            sidebar.reload()
-        case "current":
-            sidebar.selected = msg["id"] as? Int
-        default:
-            return
-        }
     }
 
     // MARK: Ponte: salvataggio e notifiche
@@ -497,7 +479,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     @objc func openDataFolder(_ sender: Any?) { NSWorkspace.shared.open(Paths.dataDir) }
 
     @objc func restartServer(_ sender: Any?) {
-        webView.isHidden = true
+        content.isHidden = true
+        store.engineStopped()
         loading.isHidden = false
         status.stringValue = "Riavvio del motore…"
         port = 0
@@ -505,42 +488,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         server.start()
     }
 
-    // MARK: WebView
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    /// Motore pronto: si mostra il contenuto e si ricaricano modelli e cronologia.
+    private func engineReady() {
         loading.isHidden = true
-        webView.isHidden = false
-        // Motore (ri)partito: la cronologia nella barra laterale va riletta.
+        content.isHidden = false
+        store.engineStarted()
         sidebar.reload()
-        // All'avvio la tastiera va alla domanda, non al campo di ricerca della barra laterale.
-        window.makeFirstResponder(webView)
-    }
-
-    /// I link esterni si aprono nel browser predefinito, non dentro l'app.
-    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if let url = action.request.url, url.host != "127.0.0.1", url.scheme?.hasPrefix("http") == true {
-            NSWorkspace.shared.open(url)
-            decisionHandler(.cancel)
-            return
-        }
-        decisionHandler(.allow)
-    }
-
-    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
-                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.beginSheetModal(for: window) { _ in completionHandler() }
-    }
-
-    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
-                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Annulla")
-        alert.beginSheetModal(for: window) { r in completionHandler(r == .alertFirstButtonReturn) }
+        // La tastiera non deve finire nel campo di ricerca della barra laterale.
+        window.makeFirstResponder(nil)
+        if let id = store.current?.id { Task { await store.open(id) } }
     }
 }
 

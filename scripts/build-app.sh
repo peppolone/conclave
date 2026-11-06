@@ -14,8 +14,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/server"
 
 echo "→ Compilazione Swift"
-xcrun swiftc -O "$ROOT/macos/main.swift" "$ROOT/macos/Settings.swift" "$ROOT/macos/ModelsTab.swift" "$ROOT/macos/Sidebar.swift" -o "$APP/Contents/MacOS/AICouncil" \
-  -framework AppKit -framework WebKit
+# Tutti i file Swift dell'app (render-icon.swift è uno strumento di build a parte).
+SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift | grep -v render-icon.swift)}")
+xcrun swiftc -O "${SOURCES[@]}" -o "$APP/Contents/MacOS/AICouncil" \
+  -framework AppKit
 
 echo "→ Copia del motore"
 cp -R "$ROOT/src" "$ROOT/web" "$APP/Contents/Resources/server/"
