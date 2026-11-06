@@ -18,7 +18,7 @@ export interface CatalogModel {
 const FREE_PLAN = new Set(["groq", "mistral", "cerebras"]);
 
 // Modelli che non servono a una discussione testuale.
-const NOT_CHAT = /(embed|tts|whisper|transcri|audio|speech|imagen|image|veo|lyria|guard|moderation|aqa|live|realtime|robotics|computer-use|search|ocr|rerank|dall-e|sora|native-audio|nano-banana|compound|playai|safeguard)/i;
+const NOT_CHAT = /(embed|tts|whisper|transcri|audio|speech|imagen|image|veo|lyria|guard|moderation|aqa|live|realtime|robotics|computer-use|search|ocr|rerank|dall-e|sora|native-audio|nano-banana|compound|playai|safeguard|orpheus|prompt-guard)/i;
 
 const cache = new Map<string, { at: number; models: CatalogModel[] }>();
 const TTL = 10 * 60_000;

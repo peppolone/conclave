@@ -240,7 +240,9 @@ final class SettingsModel: ObservableObject {
             else { gone.append(m.label) }                                                                 // 400/404: ritirato
         }
         if !gone.isEmpty {
-            return .warn("Chiave valida, ma questi modelli non sono disponibili: \(gone.joined(separator: ", ")). Va aggiornato l'elenco modelli.")
+            // Nessuna azione richiesta all'utente: al riavvio il motore li sostituisce e salva la scelta.
+            let ok = working.isEmpty ? "" : "funzionante: \(working.joined(separator: ", ")). "
+            return .ok("Chiave valida · \(ok)Ritirati dal provider: \(gone.joined(separator: ", ")). L'app li sostituisce da sola con i migliori modelli disponibili: li trovi nella scheda Modelli.")
         }
         if !busy.isEmpty {
             let ok = working.isEmpty ? "" : "attivo: \(working.joined(separator: ", ")) · "

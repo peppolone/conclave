@@ -2,7 +2,7 @@
 // automatica attiva, sostituisce quelli fuori uso con il migliore disponibile dello stesso provider.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { config, selection, isAvailable, DATA_DIR, type ModelDef } from "./config.ts";
+import { config, selection, isAvailable, DATA_DIR, saveSelection, type ModelDef } from "./config.ts";
 import { listCatalog, probe, type ProbeStatus } from "./catalog.ts";
 
 export interface Health {
@@ -26,11 +26,34 @@ export function modelsToTry(m: ModelDef): string[] {
 
 const MAX_REPLACEMENT_PROBES = 4;
 
+/** Nome leggibile per un modello del catalogo (alcuni provider danno solo l'id). */
+export function prettyName(name: string | undefined, id: string): string {
+  if (name && name !== id) return name.replace(/\s*\(free\)\s*$/i, "").slice(0, 40);
+  const last = id.split("/").pop() ?? id;
+  return last
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => (/^\d+(\.\d+)?b$/i.test(w) ? w.toUpperCase() : /^(gpt|oss)$/i.test(w) ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
+    .join(" ")
+    .replace(/^GPT OSS/, "GPT-OSS")
+    .slice(0, 40);
+}
+
+/** Aggiorna in modo permanente un membro del consiglio il cui modello è stato ritirato. */
+function replaceForever(m: ModelDef, model: string, label: string): void {
+  m.model = model;
+  m.label = label;
+  m.fallback = undefined;
+  try { saveSelection(selection); } catch { /* resta valido almeno per questa sessione */ }
+}
+
 async function checkOne(m: ModelDef, taken: Set<string>): Promise<void> {
   if (!isAvailable(m)) { health.set(m.id, { status: "nokey" }); return; }
   health.set(m.id, { status: "checking" });
   const provider = m.provider!;
   let lastBusy = false;
+  // Il modello configurato non esiste più (404/400), non è solo occupato o fuori quota.
+  let primaryGone = false;
 
   // 1. Modello configurato e riserve dichiarate.
   for (const name of [m.model, ...(m.fallback ?? [])]) {
@@ -40,8 +63,13 @@ async function checkOne(m: ModelDef, taken: Set<string>): Promise<void> {
       taken.add(`${provider}/${name}`);
       return;
     }
+    if (name === m.model && r.status === "gone") primaryGone = true;
     if (r.status === "busy") lastBusy = true;
     if (r.status === "auth") { health.set(m.id, { status: "down", note: "chiave non valida" }); return; }
+  }
+  // Se il catalogo del provider non lo elenca più, è ritirato anche se la prova ha dato altro.
+  if (!primaryGone) {
+    try { primaryGone = !(await listCatalog(provider)).some((c) => c.id === m.model); } catch { /* catalogo non raggiungibile */ }
   }
 
   // 2. Scelta automatica: il migliore del catalogo che risponde e non è già nel consiglio.
@@ -55,7 +83,14 @@ async function checkOne(m: ModelDef, taken: Set<string>): Promise<void> {
         const r: { status: ProbeStatus } = await probe(provider, c.id);
         if (r.status === "ok") {
           taken.add(`${provider}/${c.id}`);
-          health.set(m.id, { status: "ok", using: c.id, note: `${m.model} non disponibile: sostituito automaticamente con ${c.name}` });
+          if (primaryGone) {
+            // Ritirato dal provider: la sostituzione diventa definitiva (nome e modello aggiornati).
+            const old = m.label;
+            replaceForever(m, c.id, prettyName(c.name, c.id));
+            health.set(m.id, { status: "ok", note: `${old} non esiste più: sostituito con ${m.label}` });
+          } else {
+            health.set(m.id, { status: "ok", using: c.id, note: `${m.model} non disponibile: sostituito automaticamente con ${c.name}` });
+          }
           return;
         }
       }
@@ -65,6 +100,14 @@ async function checkOne(m: ModelDef, taken: Set<string>): Promise<void> {
   health.set(m.id, lastBusy
     ? { status: "busy", note: "momentaneamente sovraccarico: durante il dibattito riproverà" }
     : { status: "down", note: "non risponde" });
+}
+
+/**
+ * Sostituzione presa dal catalogo (non una riserva dichiarata): non va in cache,
+ * così al prossimo avvio si ricontrolla e, se il modello è ritirato, si rende definitiva.
+ */
+function isTemporary(m: ModelDef, h: Health): boolean {
+  return Boolean(h.using && !(m.fallback ?? []).includes(h.using));
 }
 
 // ---- Memoria degli esiti ----
@@ -91,7 +134,7 @@ function writeCache(): void {
   for (const m of config.models) {
     if (m.kind !== "openai") continue;
     const h = health.get(m.id);
-    if (h?.status !== "ok") continue;
+    if (h?.status !== "ok" || isTemporary(m, h)) continue;
     // Conserva la data della prova originale se l'esito arrivava già dalla memoria.
     const prev = old[m.id];
     out[m.id] = { sig: signature(m), at: prev && prev.sig === signature(m) && cachedIds.has(m.id) ? prev.at : now, health: h };
@@ -116,7 +159,7 @@ export function runHealthCheck(force = false): Promise<void> {
   for (const m of config.models) {
     if (m.kind === "claude-cli") { health.set(m.id, { status: "ok" }); continue; }
     const c = cache[m.id];
-    if (c && c.sig === signature(m) && Date.now() - c.at < CACHE_TTL && isAvailable(m)) {
+    if (c && c.sig === signature(m) && Date.now() - c.at < CACHE_TTL && isAvailable(m) && !isTemporary(m, c.health)) {
       health.set(m.id, c.health);
       cachedIds.add(m.id);
       if (c.health.using) taken.add(`${m.provider}/${c.health.using}`);
