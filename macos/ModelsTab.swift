@@ -460,14 +460,12 @@ struct ModelsTab: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Form {
+                SettingsPage("Modelli") {
                     councilSection
                     catalogSection
                 }
-                .formStyle(.grouped)
             }
-            Divider()
-            HStack {
+            SettingsBar {
                 let n = model.selection.models.count
                 Text(n == 1 ? "1 voce nel consiglio" : "\(n) voci nel consiglio").foregroundStyle(.secondary)
                 if let saveError {
@@ -486,15 +484,13 @@ struct ModelsTab: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.dirty || saving)
             }
-            .padding(14)
         }
-        .frame(width: settingsPanelSize.width, height: settingsPanelSize.height)
     }
 
     // MARK: Voci del consiglio
 
     private var councilSection: some View {
-        Section {
+        SettingsSection("Voci del consiglio", footer: "Ogni voce è una famiglia di modelli. Con “Automatico” l'app usa la variante migliore che risponde e tiene le altre come riserva. “Partecipa di default” la preseleziona nelle nuove discussioni.") {
             ForEach(model.selection.models) { m in voiceRow(m) }
 
             HStack(spacing: 8) {
@@ -509,16 +505,13 @@ struct ModelsTab: View {
                 Button("Aggiorna stato") { Task { await model.refreshHealth() } }
             }
 
-            Toggle(isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) })) {
-                Text("Scelta automatica all'avvio")
-                Text("All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.")
+            SettingsRow("Scelta automatica all'avvio",
+                        detail: "All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.") {
+                Toggle("Scelta automatica all'avvio", isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-        } header: {
-            Text("Voci del consiglio")
-        } footer: {
-            Text("Ogni voce è una famiglia di modelli. Con “Automatico” l'app usa la variante migliore che risponde e tiene le altre come riserva. “Partecipa di default” la preseleziona nelle nuove discussioni.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -595,7 +588,7 @@ struct ModelsTab: View {
     // MARK: Aggiungi una voce
 
     private var catalogSection: some View {
-        Section {
+        SettingsSection("Aggiungi una voce", footer: "I modelli “Gratis” non costano nulla: con “Mostra solo modelli gratuiti” attivo vedi solo quelli. “Consigliato” è una stima basata su versione, data e dimensione del modello; usa “Prova” per sapere se un modello risponde davvero con il tuo account.") {
             let withKey = model.providers.filter(\.hasKey)
             if withKey.isEmpty {
                 Label {
@@ -605,17 +598,26 @@ struct ModelsTab: View {
                 }
                 .foregroundStyle(.secondary)
             } else {
-                Picker("Provider", selection: $model.provider) {
-                    ForEach(withKey) { p in Text(p.name).tag(p.id) }
+                SettingsRow("Provider") {
+                    Picker("Provider", selection: $model.provider) {
+                        ForEach(withKey) { p in Text(p.name).tag(p.id) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .onChange(of: model.provider) { _, _ in Task { await model.loadCatalog() } }
                 }
-                .onChange(of: model.provider) { _, _ in Task { await model.loadCatalog() } }
 
-                LabeledContent("Cerca") {
+                SettingsRow("Cerca") {
                     NativeSearchField(text: $model.search, prompt: "Cerca una famiglia o un modello")
-                        .frame(minWidth: 220, maxWidth: 320)
+                        .frame(width: 280)
                 }
 
-                Toggle("Mostra solo modelli gratuiti", isOn: $model.onlyFree)
+                SettingsRow("Mostra solo modelli gratuiti") {
+                    Toggle("Mostra solo modelli gratuiti", isOn: $model.onlyFree)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                }
 
                 let families = model.visibleFamilies
                 HStack(spacing: 8) {
@@ -645,12 +647,6 @@ struct ModelsTab: View {
                     }
                 }
             }
-        } header: {
-            Text("Aggiungi una voce")
-        } footer: {
-            Text("I modelli “Gratis” non costano nulla: con “Mostra solo modelli gratuiti” attivo vedi solo quelli. “Consigliato” è una stima basata su versione, data e dimensione del modello; usa “Prova” per sapere se un modello risponde davvero con il tuo account.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -700,7 +696,6 @@ struct ModelsTab: View {
                 .padding(.top, 4)
             }
         }
-        .padding(.vertical, 2)
     }
 
     @ViewBuilder
