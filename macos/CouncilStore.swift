@@ -419,7 +419,9 @@ final class CouncilStore: ObservableObject {
             listen(id)
             return
         }
-        current = d
+        // Si pubblica una sola volta, a contenuto completo: uno stato intermedio vuoto farebbe
+        // tornare in cima la vista del dibattito già aperto (riconnessione, Ricarica).
+        if current?.id != id { current = d }
         onCurrentChanged?(id)
         for m in messages {
             let mid = m["model_id"] as? String ?? ""

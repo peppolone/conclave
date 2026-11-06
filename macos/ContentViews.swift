@@ -292,6 +292,9 @@ struct DebateView: View {
     /// Dibattito seguito dal vivo: i round restano aperti anche quando arriva il verdetto,
     /// così la posizione di lettura non cambia.
     @State private var watchedLive: Bool
+    /// true finché si segue il dibattito dal vivo (l'utente non ha scorso in su per rileggere).
+    @State private var following = true
+    @State private var userScrolling = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(store: CouncilStore, debate: DebateState, saveFile: @escaping (_ filename: String, _ text: String) -> Void) {
@@ -320,10 +323,6 @@ struct DebateView: View {
 
                     if debate.isRunning { progressBar.padding(.top, 14) }
 
-                    // Dibattito aperto da concluso: verdetto in cima. Seguito dal vivo: il verdetto
-                    // arriva in fondo, così il contenuto sopra non si sposta mentre si legge.
-                    if !watchedLive, let v = debate.verdict { verdictBlock(v) }
-
                     if !debate.phases.isEmpty && !debate.isRunning && !watchedLive { courseHeading.padding(.top, 32) }
 
                     ForEach(debate.phases) { p in
@@ -331,17 +330,76 @@ struct DebateView: View {
                         phaseSection(p).id("phase-\(p.id)")
                     }
 
-                    if watchedLive, let v = debate.verdict {
+                    // Il verdetto chiude sempre il dibattito, in fondo, come l'ultima risposta in una chat.
+                    if let v = debate.verdict {
                         Divider().padding(.vertical, 16)
                         verdictBlock(v)
                     }
+
+                    Color.clear.frame(height: 1).id(Self.endID)
                 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 24)
                 .frame(maxWidth: 980, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            // Si segue il dibattito come in una chat: a ogni nuovo round (e al verdetto) la vista
+            // scende all'inizio della nuova sezione, così si legge dall'inizio. Se l'utente scorre
+            // in su per rileggere, l'inseguimento si ferma finché non torna in fondo o preme il
+            // pulsante "Vai al round in corso". Solo lo scorrimento dell'utente cambia `following`:
+            // la crescita del contenuto non lo spegne.
+            .onScrollPhaseChange { _, new, context in
+                userScrolling = new == .interacting || new == .decelerating
+                let g = context.geometry
+                if new == .idle, g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120 { following = true }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                if userScrolling, new < old - 2 { following = false }
+            }
+            .onChange(of: sectionKey) {
+                guard watchedLive, following else { return }
+                Task { @MainActor in
+                    // Si attende il layout della nuova sezione prima di scorrere.
+                    try? await Task.sleep(for: .milliseconds(80))
+                    scrollToLatest(proxy)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if debate.isRunning && !following {
+                    Button {
+                        following = true
+                        scrollToLatest(proxy)
+                    } label: {
+                        Label(debate.judging ? "Vai al verdetto" : "Vai al round in corso", systemImage: "arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.large)
+                    .shadow(radius: 4, y: 1)
+                    .padding(.bottom, 18)
+                    .transition(.opacity)
+                }
+            }
         }
+    }
+
+    private static let endID = "debate-end"
+
+    /// Cambia a ogni nuovo round, all'inizio del giudizio e all'arrivo del verdetto.
+    private var sectionKey: String {
+        "\(debate.phases.count)-\(debate.judging)-\(debate.verdict != nil)"
+    }
+
+    /// Porta all'inizio della sezione più recente: verdetto, round in corso o fondo pagina.
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        let target: String
+        let anchor: UnitPoint
+        if debate.verdict != nil { target = "phase-verdict"; anchor = .top }
+        else if debate.judging { target = Self.endID; anchor = .bottom }
+        else if let last = debate.phases.last { target = "phase-\(last.id)"; anchor = .top }
+        else { target = Self.endID; anchor = .bottom }
+        if reduceMotion { proxy.scrollTo(target, anchor: anchor) }
+        else { withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(target, anchor: anchor) } }
     }
 
     private func verdictBlock(_ v: String) -> some View {
