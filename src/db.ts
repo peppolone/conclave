@@ -33,6 +33,9 @@ db.exec(`
   const cols = new Set((db.prepare(`PRAGMA table_info(debates)`).all() as { name: string }[]).map((c) => c.name));
   const add: [string, string][] = [["options", "TEXT"], ["parent_id", "INTEGER"], ["finished_at", "TEXT"]];
   for (const [name, type] of add) if (!cols.has(name)) db.exec(`ALTER TABLE debates ADD COLUMN ${name} ${type}`);
+  // Modello che ha risposto davvero e quello che ha sostituito (riserve della stessa famiglia).
+  const mcols = new Set((db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[]).map((c) => c.name));
+  for (const name of ["model_used", "replaced"]) if (!mcols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} TEXT`);
 }
 // Dibattiti rimasti a metà per un riavvio del server.
 db.exec(`UPDATE debates SET status = 'interrupted' WHERE status = 'running'`);
@@ -43,6 +46,8 @@ export interface MessageRow {
   content: string | null;
   error: string | null;
   ms: number | null;
+  model_used?: string | null;
+  replaced?: string | null;
 }
 
 export interface StoredOptions {
@@ -58,8 +63,8 @@ export function createDebate(question: string, models: string[], options: Stored
 }
 
 export function saveMessage(debateId: number, m: MessageRow): void {
-  db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms);
+  db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms, model_used, replaced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null);
 }
 
 export function finishDebate(id: number, status: string, verdict: string | null): void {
@@ -84,7 +89,7 @@ export function getDebate(id: number) {
       }
     | undefined;
   if (!d) return undefined;
-  const messages = db.prepare(`SELECT model_id, phase, content, error, ms FROM messages WHERE debate_id = ? ORDER BY id`).all(id) as unknown as MessageRow[];
+  const messages = db.prepare(`SELECT model_id, phase, content, error, ms, model_used, replaced FROM messages WHERE debate_id = ? ORDER BY id`).all(id) as unknown as MessageRow[];
   let options: StoredOptions | null = null;
   try { options = d.options ? (JSON.parse(d.options) as StoredOptions) : null; } catch { /* valore rovinato */ }
   return { ...d, models: JSON.parse(d.models) as string[], options, messages };

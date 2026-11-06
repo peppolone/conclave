@@ -3,6 +3,7 @@ import type { ChatRequest, ChatResult } from "./types.ts";
 
 const TIMEOUT_MS = 120_000;
 const MAX_RETRIES = 2;
+const ATTEMPT_WITH_RESERVE_MS = 35_000;
 
 export class HttpError extends Error {
   status: number;
@@ -52,11 +53,11 @@ export function isHardLimit(message: string): boolean {
   return /exceeded your current quota|limit: 0\b|per day|\(RPD\)|\(TPD\)|reduce your message size|request too large/i.test(message);
 }
 
-export async function once(p: Provider, model: string, req: ChatRequest): Promise<string> {
+export async function once(p: Provider, model: string, req: ChatRequest, timeoutMs = TIMEOUT_MS): Promise<string> {
   const key = process.env[p.keyEnv]?.trim();
   if (!key) throw new Error(`chiave ${p.keyEnv} mancante nel file .env`);
 
-  const signals = [AbortSignal.timeout(TIMEOUT_MS)];
+  const signals = [AbortSignal.timeout(timeoutMs)];
   if (req.signal) signals.push(req.signal);
 
   const res = await fetch(`${p.baseUrl}/chat/completions`, {
@@ -122,11 +123,17 @@ export async function chatOpenAI(p: Provider, models: string[], req: ChatRequest
     const maxRetries = hasNext ? 0 : MAX_RETRIES; // con una riserva disponibile non si aspetta
     for (let attempt = 0; ; attempt++) {
       try {
-        const text = await once(p, model, req);
+        // Se c'è una riserva, un modello lento non deve consumare tutto il tempo del round.
+        const text = await once(p, model, req, hasNext ? ATTEMPT_WITH_RESERVE_MS : TIMEOUT_MS);
         return { text, ms: Date.now() - started, model };
       } catch (e) {
         lastError = e;
-        if (req.signal?.aborted || !(e instanceof HttpError)) throw e;
+        if (req.signal?.aborted) throw e;
+        // Modello che non risponde in tempo o risposta illeggibile: si passa alla riserva, se c'è.
+        if (!(e instanceof HttpError)) {
+          if (hasNext) break;
+          throw e;
+        }
         const busy = e.status === 429 || e.status >= 500;
         const gone = e.status === 404 || e.status === 400;
         // Quota giornaliera esaurita o richiesta troppo grande: riprovare tra pochi secondi è inutile.

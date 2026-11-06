@@ -28,7 +28,7 @@ export type DebateEvent =
       parentId: number | null;
     }
   | { type: "phase"; phase: Phase; note?: string }
-  | { type: "message"; phase: Phase; modelId: string; text: string; ms: number }
+  | { type: "message"; phase: Phase; modelId: string; text: string; ms: number; model?: string; replaced?: string }
   | { type: "error"; phase: Phase; modelId: string; error: string }
   | { type: "done"; status: "done" | "failed" | "cancelled"; verdict?: string; error?: string };
 
@@ -94,8 +94,8 @@ export async function runDebate(
           const budget = AbortSignal.any([signal, AbortSignal.timeout(PARTICIPANT_BUDGET_MS)]);
           const r = await chat(d.def, { system: P.SYSTEM_DEBATER, user: build(d), signal: budget });
           store(d, r.text);
-          saveMessage(debateId, { model_id: d.def.id, phase: name, content: r.text, error: null, ms: r.ms });
-          emit({ type: "message", phase: name, modelId: d.def.id, text: r.text, ms: r.ms });
+          saveMessage(debateId, { model_id: d.def.id, phase: name, content: r.text, error: null, ms: r.ms, model_used: r.model, replaced: r.replaced });
+          emit({ type: "message", phase: name, modelId: d.def.id, text: r.text, ms: r.ms, model: r.model, replaced: r.replaced });
         } catch (e) {
           if (signal.aborted) return;
           const raw = (e as Error).name === "TimeoutError" || /abort|timeout/i.test((e as Error).message)

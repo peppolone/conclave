@@ -231,3 +231,7 @@ details.phase > summary .note { font-size: 12px; font-weight: 400; color: var(--
   #sidebar { width: auto; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; }
   main { padding: 20px 16px 48px; }
 }
+
+/* Modello che ha risposto per la voce (e cambio verso una riserva). */
+.card .used { margin: 0 0 6px; font-size: 11px; color: var(--muted); }
+.card .switch { margin: 0 0 8px; padding: 6px 10px; font-size: 12px; border-radius: 8px; background: var(--fill); color: var(--text); }

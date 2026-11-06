@@ -386,11 +386,15 @@ function card(phase, modelId) {
   return c;
 }
 
-function fillCard(phase, modelId, text, ms, error) {
+function fillCard(phase, modelId, text, ms, error, used, replaced) {
   const c = card(phase, modelId);
   c.className = `card ${error ? "err" : ""}`;
   c.querySelector("span").textContent = ms ? `${(ms / 1000).toFixed(1)} s` : "";
-  c.querySelector(".body").innerHTML = error ? esc(error) : md(text);
+  // Quale modello della famiglia ha risposto davvero, e se ha sostituito quello previsto.
+  const sw = replaced && used
+    ? `<p class="switch">Ha risposto <strong>${esc(used)}</strong> al posto di ${esc(replaced)}, che non ha risposto in tempo.</p>`
+    : used ? `<p class="used">${esc(used)}</p>` : "";
+  c.querySelector(".body").innerHTML = error ? esc(error) : sw + md(text);
   log.set(`${phase}|${modelId}`, { phase, modelId, text, error });
 }
 
@@ -429,7 +433,7 @@ function handle(e) {
       break;
     case "message":
       if (e.phase === "verdict") showVerdict(e.text);
-      else fillCard(e.phase, e.modelId, e.text, e.ms);
+      else fillCard(e.phase, e.modelId, e.text, e.ms, null, e.model, e.replaced);
       break;
     case "error":
       if (e.phase === "verdict") setStatus(`Giudice non disponibile (${e.error.slice(0, 120)}), provo un altro modello…`, "err");
@@ -486,7 +490,7 @@ async function openDebate(id) {
     if (m.model_id === "_meta") continue;
     if (m.model_id === "_note") { phaseEl(m.phase, m.content || ""); continue; }
     if (m.phase === "verdict") continue;
-    fillCard(m.phase, m.model_id, m.content || "", m.ms, m.error);
+    fillCard(m.phase, m.model_id, m.content || "", m.ms, m.error, m.model_used, m.replaced);
   }
   if (d.verdict) showVerdict(d.verdict);
   const labels = { done: ["Concluso", "ok"], failed: ["Non riuscito", "err"], cancelled: ["Annullato", "err"], interrupted: ["Interrotto (server riavviato)", "err"] };

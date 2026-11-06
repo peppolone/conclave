@@ -9,11 +9,11 @@
   },
   "judge": { "id": "claude", "label": "Claude", "kind": "claude-cli", "model": "sonnet" },
   "models": [
-    { "id": "claude",   "label": "Claude",        "kind": "claude-cli", "model": "sonnet", "default": false },
-    { "id": "gemini",   "label": "Gemini Flash",  "kind": "openai", "provider": "gemini",     "model": "gemini-3.8-flash", "fallback": ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemma-4-31b-it"], "default": true },
-    { "id": "gptoss",   "label": "GPT-OSS 120B",  "kind": "openai", "provider": "groq",       "model": "openai/gpt-oss-120b", "fallback": ["openai/gpt-oss-20b"], "default": true },
-    { "id": "qwen",     "label": "Qwen 3.8 27B",  "kind": "openai", "provider": "groq",       "model": "qwen/qwen3.8-27b", "default": true },
-    { "id": "deepseek", "label": "DeepSeek",      "kind": "openai", "provider": "openrouter", "model": "deepseek/deepseek-chat-v3-0324:free", "default": true },
-    { "id": "mistral",  "label": "Mistral Small", "kind": "openai", "provider": "mistral",    "model": "mistral-small-latest", "default": false }
+    { "id": "claude",   "label": "Claude",   "kind": "claude-cli", "model": "sonnet", "default": false },
+    { "id": "gemini",   "label": "Gemini",   "kind": "openai", "provider": "gemini",     "family": "gemini",   "model": "auto", "default": true },
+    { "id": "gpt-oss",  "label": "GPT-OSS",  "kind": "openai", "provider": "groq",       "family": "gpt-oss",  "model": "auto", "default": true },
+    { "id": "qwen",     "label": "Qwen",     "kind": "openai", "provider": "groq",       "family": "qwen",     "model": "auto", "default": true },
+    { "id": "deepseek", "label": "DeepSeek", "kind": "openai", "provider": "openrouter", "family": "deepseek", "model": "auto", "default": true },
+    { "id": "mistral",  "label": "Mistral",  "kind": "openai", "provider": "mistral",    "family": "mistral",  "model": "auto", "default": false }
   ]
 }

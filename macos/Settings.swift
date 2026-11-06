@@ -17,7 +17,7 @@ struct ProviderGuide: Identifiable {
 let providerGuides: [ProviderGuide] = [
     ProviderGuide(
         id: "gemini", name: "Google Gemini",
-        models: "Gemini Flash",
+        models: "Voce Gemini (Flash, Flash Lite, Gemma come riserve)",
         url: URL(string: "https://aistudio.google.com/apikey")!,
         steps: [
             "Apri Google AI Studio con il pulsante qui sotto e accedi con il tuo account Google.",
@@ -28,7 +28,7 @@ let providerGuides: [ProviderGuide] = [
         note: "Gratuito ma con quote basse: i Gemini Flash circa 20 richieste al giorno (un dibattito completo ne usa 4), i Flash Lite circa 500, Gemma circa 14.000. Finita la quota l'app passa da sola al modello successivo. I Pro non sono inclusi. Nel piano gratuito Google può usare i dati per migliorare i suoi modelli: non inserire informazioni riservate."),
     ProviderGuide(
         id: "groq", name: "Groq",
-        models: "GPT-OSS 120B, Llama 3.3 70B, Kimi K2",
+        models: "Voci GPT-OSS e Qwen",
         url: URL(string: "https://console.groq.com/keys")!,
         steps: [
             "Apri la console Groq e registrati (va bene anche l'account Google).",

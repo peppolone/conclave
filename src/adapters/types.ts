@@ -10,4 +10,6 @@ export interface ChatResult {
   ms: number;
   /** Modello che ha risposto davvero (può essere una riserva). */
   model?: string;
+  /** Modello che doveva rispondere e non l'ha fatto, se ha risposto una riserva. */
+  replaced?: string;
 }

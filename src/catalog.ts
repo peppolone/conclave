@@ -1,6 +1,7 @@
 // Catalogo dei modelli offerti da ogni provider, con stima di qualità e indicazione "gratis".
 import { config, type Provider } from "./config.ts";
 import { once, HttpError, isHardLimit } from "./adapters/openai-compat.ts";
+import { familyOf } from "./family.ts";
 
 export interface CatalogModel {
   id: string;
@@ -12,6 +13,8 @@ export interface CatalogModel {
   description?: string;
   score: number;           // stima euristica: più alto = più capace/recente
   recommended: boolean;
+  family: string;          // es. "gemini", "gpt-oss": una voce del consiglio per famiglia
+  familyLabel: string;
 }
 
 /** Provider con piano gratuito su tutti i modelli (con limiti di frequenza). */
@@ -123,7 +126,10 @@ export async function listCatalog(providerId: string, fresh = false): Promise<Ca
   const rec = (m: (typeof raw)[number]) => (sorted.length > 1 ? sorted.indexOf(key(m)) / (sorted.length - 1) : 1);
 
   const models: CatalogModel[] = raw
-    .map((m) => ({ ...m, score: score(m, rec(m)), recommended: false }))
+    .map((m) => {
+      const f = familyOf(m.id);
+      return { ...m, score: score(m, rec(m)), recommended: false, family: f.id, familyLabel: f.label };
+    })
     .sort((a, b) => b.score - a.score);
   models.filter((m) => m.free !== false).slice(0, 3).forEach((m) => (m.recommended = true));
   cache.set(providerId, { at: Date.now(), models });
@@ -150,4 +156,18 @@ export async function probe(providerId: string, model: string): Promise<ProbeRes
     if (e.status >= 500) return { status: "busy", ms, message };
     return { status: "gone", ms, message };
   }
+}
+
+/**
+ * Modelli di una famiglia presso un provider, dal migliore al peggiore (solo quelli usabili
+ * gratis o con stato sconosciuto). Il preferito, se indicato, va in testa.
+ */
+/** Famiglie "sorelle" usate come ultima riserva (es. Gemma per Gemini: quota giornaliera molto più alta). */
+const RELATED: Record<string, string[]> = { gemini: ["gemma"] };
+
+export async function familyChain(providerId: string, family: string, preferred?: string): Promise<string[]> {
+  const cat = await listCatalog(providerId);
+  const pick = (f: string) => cat.filter((c) => c.family === f && c.free !== false).map((c) => c.id);
+  const all = [...pick(family), ...(RELATED[family] ?? []).flatMap(pick)];
+  return preferred && preferred !== "auto" ? [preferred, ...all.filter((id) => id !== preferred)] : all;
 }

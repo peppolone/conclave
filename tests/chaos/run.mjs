@@ -353,7 +353,19 @@ const SCENARIOS = {
   },
 };
 
+SCENARIOS.m = async function m() {
+  const max = 150;
+  const r = await debate("m", ["ok-a", "voce"], 0, "ok-a", max * 1000);
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const msg = r.state.messages.find((x) => x.model_id === "voce" && x.phase === "initial");
+  if (!msg?.content) return [false, `la voce non ha risposto (errore: ${msg?.error?.slice(0, 80) ?? "nessun messaggio"})`, r.secs];
+  if (msg.model_used !== "ok-b") return [false, `ha risposto ${msg.model_used}, atteso ok-b (riserva)`, r.secs];
+  return [true, `done, risposta della riserva ok-b${msg.replaced ? ` al posto di ${msg.replaced}` : ""} in ${(msg.ms / 1000).toFixed(0)} s`, r.secs];
+};
+
 const DESCR = {
+  m: "voce di famiglia: riserva se il principale si blocca",
   a: "ok-a + ok-b, 3 round", b: "ok-a + ok-b + hang, 2 round", b2: "un solo modello rimasto", c: "flaky-critique rientra", d: "ratelimit con attesa",
   e: "giudice hang → riserva", f: "html non alterato", g: "empty/crash500/gone esclusi", h: "huge 300k caratteri",
   i: "annullamento", j: "input non validi", l: "quota + length (extra)", k: "motore vivo alla fine",
@@ -369,12 +381,13 @@ async function main() {
   mock = m.proc; mockPort = m.port;
 
   const cfgPath = join(dataDir, "models.chaos.json");
-  const member = (id) => ({ id, label: `Chaos ${id}`, kind: "openai", provider: "chaos", model: id, default: false });
+  const member = (id) => ({ id, label: `Chaos ${id}`, kind: "openai", provider: "chaos", model: id, family: id, default: false });
   await writeFile(cfgPath, JSON.stringify({
     providers: { chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" } },
     // Giudice predefinito non Claude: un modello "ritirato", così la catena di riserva passa ai partecipanti.
     judge: { id: "chaos-judge", label: "Chaos giudice predefinito", kind: "openai", provider: "chaos", model: "gone" },
-    models: MODELS.map(member),
+    // Voce di famiglia: il modello principale si blocca, deve rispondere la riserva ok-b.
+    models: [...MODELS.map(member), { id: "voce", label: "Voce di famiglia", kind: "openai", provider: "chaos", family: "voce", model: "hang", fallback: ["ok-b"], default: false }],
   }, null, 2));
 
   const env = { ...process.env, COUNCIL_DATA: dataDir, COUNCIL_MODELS: cfgPath, PORT: "0", CHAOS_KEY: "chaos-test-key" };

@@ -3,11 +3,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { config, selection, isAvailable, DATA_DIR, saveSelection, type ModelDef } from "./config.ts";
-import { listCatalog, probe, type ProbeStatus } from "./catalog.ts";
+import { listCatalog, probe, familyChain } from "./catalog.ts";
+import { AUTO, familyOf } from "./family.ts";
 
 export interface Health {
   status: "checking" | "ok" | "busy" | "down" | "nokey" | "unchecked";
   using?: string;      // modello effettivamente in uso (se diverso dal configurato)
+  chain?: string[];    // ordine dei modelli da provare: primo = in uso, poi le riserve
   note?: string;
 }
 
@@ -18,10 +20,22 @@ export function getHealth(id: string): Health {
   return health.get(id) ?? { status: "unchecked" };
 }
 
-/** Modello da chiamare per primo: quello trovato funzionante al controllo. */
-export function modelsToTry(m: ModelDef): string[] {
-  const using = health.get(m.id)?.using;
-  return [...new Set([using, m.model, ...(m.fallback ?? [])].filter((x): x is string => Boolean(x)))];
+/**
+ * Ordine dei modelli da chiamare per una voce: la catena trovata al controllo d'avvio
+ * (il primo che rispondeva, poi le altre varianti della famiglia), altrimenti quella del catalogo.
+ */
+export async function modelsToTry(m: ModelDef): Promise<string[]> {
+  const h = health.get(m.id);
+  const base = [h?.using, m.model === AUTO ? undefined : m.model, ...(h?.chain ?? []), ...(m.fallback ?? [])];
+  let list = [...new Set(base.filter((x): x is string => Boolean(x)))];
+  if (list.length <= 1 && m.provider) {
+    try { list = [...new Set([...list, ...(await familyChain(m.provider, voiceFamily(m), m.model))])]; } catch { /* catalogo non raggiungibile */ }
+  }
+  return list.slice(0, 6);
+}
+
+function voiceFamily(m: ModelDef): string {
+  return m.family ?? familyOf(m.model).id;
 }
 
 const MAX_REPLACEMENT_PROBES = 4;
@@ -47,67 +61,57 @@ function replaceForever(m: ModelDef, model: string, label: string): void {
   try { saveSelection(selection); } catch { /* resta valido almeno per questa sessione */ }
 }
 
-async function checkOne(m: ModelDef, taken: Set<string>): Promise<void> {
+async function checkOne(m: ModelDef, _taken: Set<string>): Promise<void> {
   if (!isAvailable(m)) { health.set(m.id, { status: "nokey" }); return; }
   health.set(m.id, { status: "checking" });
   const provider = m.provider!;
-  let lastBusy = false;
-  // Il modello configurato non esiste più (404/400), non è solo occupato o fuori quota.
-  let primaryGone = false;
+  const fixed = m.model === AUTO ? undefined : m.model;
 
-  // 1. Modello configurato e riserve dichiarate.
-  for (const name of [m.model, ...(m.fallback ?? [])]) {
+  // Catena della voce: modello scelto (se fisso), poi le varianti della famiglia dalla migliore.
+  let chain: string[] = [];
+  let catalogOk = true;
+  try { chain = await familyChain(provider, voiceFamily(m), fixed); } catch { catalogOk = false; }
+  chain = [...new Set([...(fixed ? [fixed] : []), ...chain, ...(m.fallback ?? [])])];
+  // Modello fisso non più elencato dal provider: ritirato. La voce passa ad "Automatico".
+  if (fixed && catalogOk) {
+    const listed = (await listCatalog(provider)).some((c) => c.id === fixed);
+    if (!listed) {
+      const old = m.label;
+      replaceForever(m, AUTO, familyOf(voiceFamily(m)).label);
+      chain = chain.filter((x) => x !== fixed);
+      health.set(m.id, { status: "checking", note: `${old} non esiste più: ora la voce sceglie da sola il modello migliore` });
+    }
+  }
+  if (chain.length === 0) { health.set(m.id, { status: "down", note: "nessun modello di questa famiglia disponibile" }); return; }
+
+  let lastBusy = false;
+  const notes: string[] = [];
+  const prevNote = health.get(m.id)?.note;
+  for (const name of chain.slice(0, MAX_REPLACEMENT_PROBES)) {
     const r = await probe(provider, name);
     if (r.status === "ok") {
-      health.set(m.id, name === m.model ? { status: "ok" } : { status: "ok", using: name, note: `${m.model} non risponde: uso la riserva ${name}` });
-      taken.add(`${provider}/${name}`);
+      const rest = chain.filter((x) => x !== name);
+      const first = fixed && m.model !== AUTO ? fixed : undefined;
+      const note = prevNote ?? (first && name !== first ? `${first} non risponde: uso ${name}` : undefined);
+      health.set(m.id, { status: "ok", using: name, chain: [name, ...rest], note });
       return;
     }
-    if (name === m.model && r.status === "gone") primaryGone = true;
     if (r.status === "busy") lastBusy = true;
     if (r.status === "auth") { health.set(m.id, { status: "down", note: "chiave non valida" }); return; }
+    notes.push(`${name}: ${r.status}`);
   }
-  // Se il catalogo del provider non lo elenca più, è ritirato anche se la prova ha dato altro.
-  if (!primaryGone) {
-    try { primaryGone = !(await listCatalog(provider)).some((c) => c.id === m.model); } catch { /* catalogo non raggiungibile */ }
-  }
-
-  // 2. Scelta automatica: il migliore del catalogo che risponde e non è già nel consiglio.
-  if (selection.auto) {
-    try {
-      const tried = new Set([m.model, ...(m.fallback ?? [])]);
-      const candidates = (await listCatalog(provider))
-        .filter((c) => c.free !== false && !tried.has(c.id) && !taken.has(`${provider}/${c.id}`))
-        .slice(0, MAX_REPLACEMENT_PROBES);
-      for (const c of candidates) {
-        const r: { status: ProbeStatus } = await probe(provider, c.id);
-        if (r.status === "ok") {
-          taken.add(`${provider}/${c.id}`);
-          if (primaryGone) {
-            // Ritirato dal provider: la sostituzione diventa definitiva (nome e modello aggiornati).
-            const old = m.label;
-            replaceForever(m, c.id, prettyName(c.name, c.id));
-            health.set(m.id, { status: "ok", note: `${old} non esiste più: sostituito con ${m.label}` });
-          } else {
-            health.set(m.id, { status: "ok", using: c.id, note: `${m.model} non disponibile: sostituito automaticamente con ${c.name}` });
-          }
-          return;
-        }
-      }
-    } catch { /* catalogo non raggiungibile: si segnala lo stato sotto */ }
-  }
-
   health.set(m.id, lastBusy
-    ? { status: "busy", note: "momentaneamente sovraccarico: durante il dibattito riproverà" }
-    : { status: "down", note: "non risponde" });
+    ? { status: "busy", chain, note: "tutte le varianti sono sovraccariche: durante il dibattito riproverà" }
+    : { status: "down", chain, note: `non risponde nessuna variante (${notes.slice(0, 3).join(", ")})` });
 }
 
 /**
  * Sostituzione presa dal catalogo (non una riserva dichiarata): non va in cache,
  * così al prossimo avvio si ricontrolla e, se il modello è ritirato, si rende definitiva.
  */
-function isTemporary(m: ModelDef, h: Health): boolean {
-  return Boolean(h.using && !(m.fallback ?? []).includes(h.using));
+function isTemporary(_m: ModelDef, h: Health): boolean {
+  // Esiti senza catena (vecchio formato della cache) si ricontrollano.
+  return !h.chain;
 }
 
 // ---- Memoria degli esiti ----
