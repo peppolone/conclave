@@ -187,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         seedSettings()
+        // Tema salvato (Sistema / Chiaro / Scuro) prima di creare la finestra.
+        AppAppearance.apply()
         buildMenu()
         buildWindow()
         settings.model.onSaved = { [weak self] in self?.restartServer(nil) }
@@ -245,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         stack.spacing = 12
         loading = stack
 
-        // Area del contenuto: la pagina parte sotto la toolbar (safe area), il vetro resta alla navigazione.
+        // Area del contenuto: i controlli restano nella safe area sotto la toolbar, il vetro resta alla navigazione.
         let container = NSView()
         for v in [content!, loading!] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -255,6 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
+            // Il contenuto parte sotto la toolbar: il testo che scorre non finisce sotto il titolo;
+            // la toolbar mostra lo sfondo della finestra (Brand.canvas), dello stesso colore.
             content.topAnchor.constraint(equalTo: safe.topAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             loading.centerXAnchor.constraint(equalTo: safe.centerXAnchor),
@@ -270,6 +274,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         }
         sidebar.onDeleted = { [weak self] id in self?.store.deleted(id) }
         sidebar.onExport = { [weak self] id in self?.exportDiscussion(id) }
+        sidebar.onNew = { [weak self] in self?.newDebate(nil) }
+        sidebar.onSettings = { [weak self] in self?.openSettings(nil) }
         sidebarItem = NSSplitViewItem(sidebarWithViewController: NSHostingController(rootView: SidebarView(model: sidebar)))
         sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 380
@@ -288,6 +294,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             backing: .buffered, defer: false)
         window.title = "Nuova discussione"
         window.minSize = NSSize(width: 760, height: 520)
+        // Sfondo coerente con il marchio (si vede durante l'avvio e dietro la toolbar);
+        // la barra laterale resta il vetro di sistema.
+        window.backgroundColor = NSColor(Brand.canvas)
         window.contentViewController = split
         // Toolbar unificata: i pulsanti fluttuano su Liquid Glass sopra il contenuto.
         let toolbar = NSToolbar(identifier: "MainToolbar")
@@ -571,34 +580,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: id)
-        // Pulsanti con testo: etichette sempre visibili (richiesta dell'utente, ammessa dalle HIG).
+        // Pulsanti-icona con tooltip; label e paletteLabel per VoiceOver, menu di overflow e Personalizza.
+        func symbol(_ name: String, _ description: String) {
+            item.image = NSImage(systemSymbolName: name, accessibilityDescription: description)
+            item.isBordered = true
+        }
         switch id {
         case Self.newItem:
             item.label = "Nuova discussione"
-            item.title = "Nuova discussione"
-            item.toolTip = "Inizia una nuova discussione (⌘N)"
-            item.isBordered = true
+            item.toolTip = "Nuova discussione (⌘N)"
+            symbol("square.and.pencil", "Nuova discussione")
             item.action = #selector(newDebate(_:))
         case Self.copyItem:
             item.label = "Copia verdetto"
-            item.title = "Copia verdetto"
-            item.toolTip = "Copia il verdetto negli appunti (⇧⌘C)"
-            item.isBordered = true
+            item.toolTip = "Copia il verdetto (⇧⌘C)"
+            symbol("doc.on.doc", "Copia verdetto")
             item.action = #selector(copyVerdict(_:))
             item.isHidden = store.current == nil
         case Self.exportItem:
-            item.label = "Esporta…"
+            item.label = "Esporta"
             item.paletteLabel = "Esporta come Markdown"
-            item.title = "Esporta…"
-            item.toolTip = "Esporta la discussione come Markdown (⇧⌘E)"
-            item.isBordered = true
+            item.toolTip = "Esporta come Markdown (⇧⌘E)"
+            symbol("square.and.arrow.up", "Esporta come Markdown")
             item.action = #selector(exportDebate(_:))
             item.isHidden = store.current == nil
         case Self.settingsItem:
             item.label = "Impostazioni"
-            item.title = "Impostazioni"
-            item.isBordered = true
-            item.toolTip = "Impostazioni e chiavi API (⌘,)"
+            item.toolTip = "Impostazioni (⌘,)"
+            symbol("gearshape", "Impostazioni")
             item.action = #selector(openSettings(_:))
         default:
             return nil

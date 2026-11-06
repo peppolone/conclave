@@ -1,5 +1,6 @@
 // Barra laterale nativa (NSSplitViewController → Liquid Glass su macOS 26):
-// ricerca nativa e cronologia delle discussioni, raggruppata per data.
+// in cima "Nuova discussione" e la ricerca, poi la cronologia per data,
+// in fondo una barra fissa con il marchio e il pulsante Impostazioni.
 
 import AppKit
 import SwiftUI
@@ -26,6 +27,8 @@ final class SidebarModel: ObservableObject {
     var onOpen: ((Int) -> Void)?
     var onDeleted: ((Int) -> Void)?
     var onExport: ((Int) -> Void)?
+    var onNew: (() -> Void)?
+    var onSettings: (() -> Void)?
     /// Campo di ricerca nativo, per portarci il fuoco con ⌘F.
     weak var searchField: NSSearchField?
     private var searchTask: Task<Void, Never>?
@@ -164,8 +167,12 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarSearchField(model: model)
-                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
+            VStack(spacing: 6) {
+                SidebarActionRow(title: "Nuova discussione", systemImage: "square.and.pencil",
+                                 help: "Inizia una nuova discussione (⌘N)") { model.onNew?() }
+                SidebarSearchField(model: model)
+            }
+            .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
 
             List(selection: Binding(get: { model.selected }, set: { id in
                 // La lista riassegna la stessa selezione quando si aggiorna: va aperta solo
@@ -205,6 +212,30 @@ struct SidebarView: View {
             // Convenzione Mac: ⌫ sulla discussione selezionata la elimina (con conferma).
             .onDeleteCommand { model.requestDelete() }
         }
+        // Barra fissa in fondo (come nelle app di chat): marchio a sinistra, Impostazioni a destra.
+        // Nessuno sfondo opaco: resta sul vetro della barra laterale di sistema.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack(spacing: 8) {
+                    CouncilLogo(size: 18)
+                    Text("AI Council")
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button { model.onSettings?() } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 14))
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Impostazioni (⌘,)")
+                    .accessibilityLabel("Impostazioni")
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+            }
+        }
         .confirmationDialog(deleteTitle, isPresented: Binding(
             get: { model.pendingDelete != nil }, set: { if !$0 { model.pendingDelete = nil } }
         ), titleVisibility: .visible, presenting: model.pendingDelete) { d in
@@ -222,8 +253,37 @@ struct SidebarView: View {
     }
 }
 
-/// Riga della cronologia: domanda su due righe e, sotto, ora o stato in testo.
-/// Al passaggio del mouse compare anche il pulsante ✕ (scorciatoia, non l'unico modo).
+/// Riga d'azione in cima alla barra laterale (icona + testo), evidenziata al passaggio del mouse.
+struct SidebarActionRow: View {
+    let title: String
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .frame(width: 18)
+                    .foregroundStyle(Brand.accent)
+                Text(title)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(hovering ? 0.07 : 0)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+    }
+}
+
+/// Riga della cronologia: domanda su una riga con l'ora piccola a destra; sotto, solo se serve,
+/// lo stato in testo ("In corso", "Non riuscito", "Approfondimento").
+/// Al passaggio del mouse l'ora lascia il posto al pulsante ✕ (scorciatoia, non l'unico modo).
 struct DebateRow: View {
     let debate: DebateSummary
     let onDelete: () -> Void
@@ -236,23 +296,26 @@ struct DebateRow: View {
         return f
     }()
 
-    private static let dayTime: DateFormatter = {
+    private static let day: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
-        f.dateFormat = "d MMM, HH:mm"
+        f.dateFormat = "d MMM"
         return f
     }()
 
-    /// Seconda riga: "In corso", oppure ora (o data) più eventuale stato e "Approfondimento".
+    /// Ora (oggi e ieri) o giorno, a destra del titolo.
+    private var when: String {
+        guard let date = SidebarModel.date(debate.created_at) else { return "" }
+        let cal = Calendar.current
+        return cal.isDateInToday(date) || cal.isDateInYesterday(date)
+            ? Self.time.string(from: date) : Self.day.string(from: date)
+    }
+
+    /// Seconda riga facoltativa: stato non ordinario ed eventuale "Approfondimento".
     private var detail: String {
-        if debate.status == "running" { return "In corso" }
         var parts: [String] = []
-        if let date = SidebarModel.date(debate.created_at) {
-            let cal = Calendar.current
-            parts.append(cal.isDateInToday(date) || cal.isDateInYesterday(date)
-                         ? Self.time.string(from: date) : Self.dayTime.string(from: date))
-        }
         switch debate.status {
+        case "running": parts.append("In corso")
         case "failed": parts.append("Non riuscito")
         case "cancelled": parts.append("Annullato")
         case "interrupted": parts.append("Interrotto")
@@ -263,34 +326,46 @@ struct DebateRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(debate.question).lineLimit(2)
-                if !detail.isEmpty {
-                    Text(detail)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(debate.question)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ZStack(alignment: .trailing) {
+                    if debate.status == "running" {
+                        ProgressView().controlSize(.mini)
+                            .accessibilityLabel("In corso")
+                            .opacity(hovering ? 0 : 1)
+                    } else if !when.isEmpty {
+                        Text(when)
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .opacity(hovering ? 0 : 1)
+                    }
+                    Button(action: onDelete) {
+                        Image(systemName: "xmark.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Elimina")
+                    .accessibilityLabel("Elimina discussione")
+                    // Sempre presente per l'accessibilità, visibile solo al passaggio del mouse.
+                    .opacity(hovering ? 1 : 0)
                 }
+                .fixedSize()
             }
-            Spacer(minLength: 0)
-            if debate.status == "running" {
-                ProgressView().controlSize(.mini)
-                    .accessibilityLabel("In corso")
-            }
-            Button(action: onDelete) {
-                Image(systemName: "xmark.circle.fill")
-                    .symbolRenderingMode(.hierarchical)
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .help("Elimina")
-            .accessibilityLabel("Elimina discussione")
-            // Sempre presente per l'accessibilità, visibile solo al passaggio del mouse.
-            .opacity(hovering ? 1 : 0)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
         .contentShape(Rectangle())
+        .help(debate.question)
         .onHover { hovering = $0 }
     }
 }
