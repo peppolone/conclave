@@ -1,5 +1,5 @@
 // Contenuto della finestra principale in SwiftUI nativo: composer (nuova domanda) e dibattito.
-// Solo colori e controlli di sistema; nessun effetto vetro nel contenuto (linee guida macOS 26).
+// Sfondo e riquadri con i token di Brand.swift; nessun effetto vetro nel contenuto (linee guida macOS 26).
 
 import AppKit
 import SwiftUI
@@ -22,7 +22,84 @@ struct ContentRoot: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(BrandBackground())
+        .tint(Brand.accent)
+    }
+}
+
+// MARK: - Elementi comuni
+
+/// Riquadro del contenuto: superficie del marchio, bordo sottile, angoli continui.
+private struct SurfaceBox: ViewModifier {
+    var radius: CGFloat = 12
+    var stroke: Color = Brand.hairline
+    var shadow = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Brand.surface))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(stroke, lineWidth: 1))
+            .shadow(color: .black.opacity(shadow ? 0.08 : 0), radius: 14, y: 4)
+    }
+}
+
+private extension View {
+    func surfaceBox(radius: CGFloat = 12, stroke: Color = Brand.hairline, shadow: Bool = false) -> some View {
+        modifier(SurfaceBox(radius: radius, stroke: stroke, shadow: shadow))
+    }
+}
+
+/// Pulsante-icona secondario: area di clic 30 pt, sfondo leggero al passaggio del mouse,
+/// tooltip e nome per VoiceOver sempre presenti.
+private struct IconButton<Icon: View>: View {
+    let label: String
+    let help: String
+    let action: () -> Void
+    @ViewBuilder var icon: () -> Icon
+
+    init(_ label: String, help: String? = nil, action: @escaping () -> Void, @ViewBuilder icon: @escaping () -> Icon) {
+        self.label = label
+        self.help = help ?? label
+        self.action = action
+        self.icon = icon
+    }
+
+    var body: some View {
+        Button(action: action) {
+            icon()
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverIconStyle())
+        .help(help)
+        .accessibilityLabel(label)
+    }
+}
+
+extension IconButton where Icon == Image {
+    init(_ label: String, symbol: String, help: String? = nil, action: @escaping () -> Void) {
+        self.init(label, help: help, action: action) { Image(systemName: symbol) }
+    }
+}
+
+private struct HoverIconStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { HoverBody(configuration: configuration) }
+
+    struct HoverBody: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var hover = false
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(enabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : hover && enabled ? 0.06 : 0))
+                )
+                .onHover { hover = $0 }
+        }
     }
 }
 
@@ -37,120 +114,154 @@ struct ComposerView: View {
     private var hasOtherVoices: Bool { store.voices.contains { !$0.isClaude } }
     private var troubled: [VoiceInfo] { store.voices.filter { $0.problem != nil } }
 
+    /// Saluto secondo l'ora del giorno.
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: .now) {
+        case 5..<13: return "Buongiorno"
+        case 13..<18: return "Buon pomeriggio"
+        case 18..<24: return "Buonasera"
+        default: return "Ciao, nottambulo"
+        }
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(store.subtitle)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 32)
+                    welcome.padding(.bottom, 28)
 
-                if let p = store.parent {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
-                        Text("Approfondimento di: \(p.question)")
-                            .lineLimit(2)
-                            .foregroundStyle(.secondary)
-                        Button { store.parent = nil } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Togli il collegamento al dibattito precedente")
-                        .accessibilityLabel("Togli approfondimento")
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let p = store.parent { parentBanner(p) }
+                        composerBox
+                        optionsRow.padding(.horizontal, 6)
+                        messages.padding(.horizontal, 6)
                     }
-                    .font(.callout)
-                }
+                    .frame(maxWidth: 720)
 
-                composerBox
-
-                if let err = store.startError {
-                    Label(err, systemImage: "exclamationmark.circle")
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(store.hint)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 48)
                 }
-
-                if !hasOtherVoices && store.engineReady {
-                    Button("Aggiungi le chiavi API…", action: openSettings)
-                        .buttonStyle(.link)
-                }
+                .padding(.horizontal, 28)
+                .frame(maxWidth: .infinity, minHeight: geo.size.height)
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
-            .frame(maxWidth: 760, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
         .onAppear { focused = true }
     }
 
+    // MARK: Benvenuto
+
+    private var welcome: some View {
+        VStack(spacing: 12) {
+            CouncilLogo(size: 48)
+            Text(greeting)
+                .font(.system(size: 34, weight: .regular, design: .serif))
+                .accessibilityAddTraits(.isHeader)
+            Text("Fai una domanda: più AI ne discutono e un giudice decide.")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func parentBanner(_ p: ParentRef) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.turn.down.right")
+                .foregroundStyle(Brand.accent)
+                .accessibilityHidden(true)
+            Text("Approfondimento di: \(p.question)")
+                .lineLimit(2)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            IconButton("Togli approfondimento", symbol: "xmark",
+                       help: "Togli il collegamento al dibattito precedente") { store.parent = nil }
+        }
+        .font(.callout)
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .padding(.vertical, 2)
+        .surfaceBox(radius: 12)
+    }
+
+    // MARK: Riquadro della domanda
+
     private var composerBox: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // a) Domanda: campo nativo che cresce col testo, placeholder di sistema
-            TextField("Domanda", text: $store.question, prompt: Text("Fai una domanda al consiglio"), axis: .vertical)
+            TextField("Domanda", text: $store.question, prompt: Text("Cosa vuoi chiedere al consiglio?"), axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.body)
-                .lineLimit(3...10)
+                .font(.system(size: 15))
+                .lineLimit(3...12)
                 .focused($focused)
                 .accessibilityLabel("Domanda")
 
-            Divider()
-
-            // b) Partecipanti: pulsanti-interruttore di sistema, stato anche col segno di spunta
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Partecipano").font(.subheadline).foregroundStyle(.secondary)
+            HStack(alignment: .bottom, spacing: 12) {
                 FlowLayout(spacing: 6, lineSpacing: 6) {
+                    IconButton("Aggiungi modelli…", symbol: "plus",
+                               help: store.lockedCount > 0
+                                   ? "Aggiungi modelli: \(store.lockedCount) \(store.lockedCount == 1 ? "voce richiede" : "voci richiedono") una chiave API"
+                                   : "Aggiungi modelli (scheda Modelli delle Impostazioni)",
+                               action: openModels)
                     ForEach(store.voices) { v in
-                        VoiceToggle(title: store.displayName(v), provider: v.provider, problem: v.problem,
-                                    isOn: Binding(get: { store.selected.contains(v.id) },
-                                                  set: { _ in store.toggle(v.id) }))
+                        Toggle(store.displayName(v), isOn: Binding(get: { store.selected.contains(v.id) },
+                                                                    set: { _ in store.toggle(v.id) }))
+                            .toggleStyle(VoiceChipStyle(problem: v.problem, provider: v.provider))
                     }
-                    Button(action: openModels) {
-                        Label("Aggiungi modelli…", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                    .padding(.horizontal, 4)
-                    .help(store.lockedCount > 0
-                          ? "\(store.lockedCount) \(store.lockedCount == 1 ? "voce richiede" : "voci richiedono") una chiave API: apri la scheda Modelli delle Impostazioni"
-                          : "Apri la scheda Modelli delle Impostazioni")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Partecipano")
 
-                // Problemi dei modelli: simbolo + testo sempre visibile, con l'azione per risolverli
-                if !troubled.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(troubled) { v in
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .symbolRenderingMode(.multicolor)
-                                    .accessibilityHidden(true)
-                                Text("\(store.displayName(v)): \(v.problem ?? "")")
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        Button("Apri impostazioni…", action: openSettings)
-                            .buttonStyle(.link)
-                    }
-                    .font(.callout)
+                sendButton
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .surfaceBox(radius: 20, stroke: focused ? Brand.accent.opacity(0.45) : Brand.hairline, shadow: true)
+    }
+
+    private var sendButton: some View {
+        Button { Task { await store.start() } } label: {
+            ZStack {
+                Circle().fill(store.canStart ? AnyShapeStyle(Brand.accent) : AnyShapeStyle(Color.primary.opacity(0.12)))
+                if store.starting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(store.canStart ? AnyShapeStyle(.white) : AnyShapeStyle(.tertiary))
                 }
             }
+            .frame(width: 32, height: 32)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!store.canStart)
+        .keyboardShortcut(.return, modifiers: .command)
+        .help("Avvia il dibattito (⌘↩)")
+        .accessibilityLabel("Avvia il dibattito")
+    }
 
-            Divider()
+    // MARK: Opzioni sotto il riquadro: menu leggeri e stima
 
-            // c) Opzioni e invio
-            HStack(spacing: 16) {
+    private var optionsRow: some View {
+        HStack(spacing: 14) {
+            Menu {
                 Picker("Round", selection: $store.rounds) {
                     ForEach([0, 1, 2, 3], id: \.self) { r in
                         Text(CouncilStore.roundsTitles[r] ?? "\(r)").tag(r)
                     }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Label(store.rounds == 0 ? "Solo risposte" : "\(store.rounds) round",
+                      systemImage: "arrow.triangle.2.circlepath")
+            }
+            .help("Round di critica tra i modelli")
+            .accessibilityLabel("Round")
 
+            Menu {
                 Picker("Giudice", selection: judgeBinding) {
                     Section("Abbonamento Claude") {
                         ForEach(store.claudeModels, id: \.self) { m in
@@ -164,37 +275,59 @@ struct ComposerView: View {
                         }
                     }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Label("Giudice: \(store.judgeLabel)", systemImage: "checkmark.seal")
+            }
+            .help("Chi emette il verdetto")
+            .accessibilityLabel("Giudice")
 
-                Spacer(minLength: 8)
+            Spacer(minLength: 8)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.visible)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
 
-                Button { Task { await store.start() } } label: {
-                    Label {
-                        Text("Avvia")
-                    } icon: {
-                        if store.starting {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.up")
-                        }
+    @ViewBuilder private var messages: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let err = store.startError {
+                Label(err, systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(store.hint)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Problemi dei modelli: simbolo + testo sempre visibile, con l'azione per risolverli
+            if !troubled.isEmpty {
+                ForEach(troubled) { v in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                            .accessibilityHidden(true)
+                        Text("\(store.displayName(v)): \(v.problem ?? "")")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .labelStyle(.titleAndIcon)
                 }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .controlSize(.large)
-                .disabled(!store.canStart)
-                .keyboardShortcut(.return, modifiers: .command)
-                .help("Avvia il dibattito (⌘↩)")
+                Button("Apri impostazioni…", action: openSettings)
+                    .buttonStyle(.link)
+            }
+
+            if !hasOtherVoices && store.engineReady {
+                Button("Aggiungi le chiavi API…", action: openSettings)
+                    .buttonStyle(.link)
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(focused ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: focused ? 2 : 1)
-        )
+        .font(.caption)
     }
 
     /// Valore unico del menu Giudice: "claude:<modello>" oppure "voice:<id>".
@@ -213,31 +346,38 @@ struct ComposerView: View {
     }
 }
 
-/// Partecipante: interruttore a pulsante di sistema (stato "selezionato" per VoiceOver e tastiera).
-private struct VoiceToggle: View {
-    let title: String
-    let provider: String
+/// Partecipante: chip compatta attivabile. Stato con colore del marchio **e** segno di spunta;
+/// per VoiceOver resta un interruttore con tratto "selezionato".
+private struct VoiceChipStyle: ToggleStyle {
     let problem: String?
-    @Binding var isOn: Bool
+    let provider: String
 
-    var body: some View {
-        Toggle(isOn: $isOn) {
+    func makeBody(configuration: Configuration) -> some View {
+        let on = configuration.isOn
+        return Button { configuration.isOn.toggle() } label: {
             HStack(spacing: 4) {
-                if isOn { Image(systemName: "checkmark").imageScale(.small) }
-                Text(title)
+                if on {
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                }
+                configuration.label
                 if problem != nil {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .symbolRenderingMode(.multicolor)
                         .imageScale(.small)
                 }
             }
+            .font(.callout)
+            .foregroundStyle(on ? AnyShapeStyle(Brand.accent) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Capsule().fill(on ? Brand.accent.opacity(0.14) : Color.primary.opacity(0.04)))
+            .overlay(Capsule().strokeBorder(on ? Brand.accent.opacity(0.45) : Brand.hairline, lineWidth: 1))
+            .contentShape(Capsule())
         }
-        .toggleStyle(.button)
-        .buttonBorderShape(.capsule)
-        .controlSize(.regular)
-        .help(problem.map { "\(title) — \($0)" } ?? provider)
-        .accessibilityLabel(title)
-        .accessibilityValue(problem.map { "problema: \($0)" } ?? "")
+        .buttonStyle(.plain)
+        .help(problem.map { "Problema: \($0)" } ?? provider)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityValue(problem.map { "problema: \($0)" } ?? (on ? "partecipa" : "escluso"))
     }
 }
 
@@ -403,11 +543,8 @@ struct DebateView: View {
     }
 
     private func verdictBlock(_ v: String) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            actions
-            verdictBox(v).id("phase-verdict")
-        }
-        .padding(.top, 20)
+        verdictBox(v).id("phase-verdict")
+            .padding(.top, 20)
     }
 
     // MARK: Intestazione: domanda, meta, stato
@@ -415,7 +552,7 @@ struct DebateView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(debate.question)
-                .font(.title2.weight(.semibold))
+                .font(.system(.title2, design: .serif).weight(.semibold))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -472,20 +609,23 @@ struct DebateView: View {
             .progressViewStyle(.linear)
             .accessibilityValue("\(label), \(pr.done) di \(pr.total) risposte")
 
-            Button { Task { await store.cancel() } } label: {
-                Label("Interrompi", systemImage: "stop.fill")
+            IconButton("Interrompi", symbol: "stop.circle",
+                       help: "Interrompi (⌘.). Le risposte già arrivate restano salvate.") {
+                Task { await store.cancel() }
             }
-            .buttonStyle(.bordered)
             .keyboardShortcut(".", modifiers: .command)
-            .help("Interrompi il dibattito (⌘.). Le risposte già arrivate restano salvate.")
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .surfaceBox(radius: 12)
     }
 
     // MARK: Azioni sul verdetto
 
+    /// Pulsanti-icona in alto a destra del verdetto, ciascuno con tooltip e nome per VoiceOver.
     private var actions: some View {
-        HStack(spacing: 8) {
-            Button {
+        HStack(spacing: 2) {
+            IconButton(copied ? "Copiato" : "Copia verdetto", help: copied ? "Copiato" : "Copia verdetto") {
                 guard let v = debate.verdict else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(v, forType: .string)
@@ -495,49 +635,51 @@ struct DebateView: View {
                     try? await Task.sleep(for: .seconds(2))
                     copied = false
                 }
-            } label: {
-                Label(copied ? "Copiato" : "Copia verdetto", systemImage: copied ? "checkmark" : "doc.on.doc")
+            } icon: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .foregroundStyle(copied ? AnyShapeStyle(Brand.green) : AnyShapeStyle(.secondary))
                     .contentTransition(.symbolEffect(.replace))
             }
-            Button {
+            IconButton("Esporta come Markdown…", symbol: "square.and.arrow.up") {
                 if let e = store.exportMarkdown() { saveFile(e.filename, e.text) }
-            } label: {
-                Label("Esporta come Markdown…", systemImage: "square.and.arrow.up")
             }
-            Button {
+            IconButton("Approfondisci…", symbol: "arrow.turn.down.right",
+                       help: "Approfondisci: nuova domanda che parte da questo dibattito") {
                 store.deepen()
-            } label: {
-                Label("Approfondisci…", systemImage: "arrow.turn.down.right")
             }
-            .help("Nuova domanda che parte da questo dibattito")
         }
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
     }
 
     // MARK: Verdetto: unico riquadro evidenziato
 
     private func verdictBox(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(Color.accentColor)
-                    .accessibilityHidden(true)
-                Text("Verdetto del consiglio").font(.title3.weight(.semibold))
-                if let by = debate.verdictBy, !by.isEmpty {
-                    Text("di \(by)").font(.subheadline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(Brand.accent)
+                        .accessibilityHidden(true)
+                    Text("Verdetto del consiglio")
+                        .font(.system(.title3, design: .serif).weight(.semibold))
+                    if let by = debate.verdictBy, !by.isEmpty {
+                        Text("di \(by)").font(.subheadline).foregroundStyle(.secondary)
+                    }
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+
+                Spacer(minLength: 8)
+                actions
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
 
             MarkdownView(text)
                 .frame(maxWidth: 720, alignment: .leading)
         }
-        .padding(18)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.accentColor.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1))
+        .surfaceBox(radius: 16, stroke: Brand.accent.opacity(0.35), shadow: true)
     }
 
     // MARK: Svolgimento (dibattito concluso)
@@ -554,14 +696,15 @@ struct DebateView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Button("Espandi tutti") { setAll(true) }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-                .help("Apri tutti i round (⌥⌘→)")
-            Button("Comprimi tutti") { setAll(false) }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-                .help("Chiudi tutti i round (⌥⌘←)")
+            HStack(spacing: 2) {
+                IconButton("Espandi tutti", symbol: "rectangle.expand.vertical",
+                           help: "Espandi tutti i round (⌥⌘→)") { setAll(true) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                IconButton("Comprimi tutti", symbol: "rectangle.compress.vertical",
+                           help: "Comprimi tutti i round (⌥⌘←)") { setAll(false) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            }
         }
-        .buttonStyle(.borderless)
     }
 
     private func setAll(_ open: Bool) {
@@ -696,7 +839,7 @@ private struct PhaseStatusLabel: View {
         } icon: {
             Image(systemName: Self.symbol(state))
                 .foregroundStyle(state == .done ? AnyShapeStyle(Color.green)
-                                 : state == .current ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                                 : state == .current ? AnyShapeStyle(Brand.accent) : AnyShapeStyle(.secondary))
                 .symbolEffect(.pulse, isActive: state == .current && !reduceMotion)
         }
         .font(.subheadline.weight(.medium))
@@ -878,10 +1021,9 @@ private struct CardView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+        .surfaceBox(radius: 12)
         .contextMenu {
             if let text = card.text {
                 Button("Copia risposta") {
