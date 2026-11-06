@@ -235,3 +235,10 @@ details.phase > summary .note { font-size: 12px; font-weight: 400; color: var(--
 /* Modello che ha risposto per la voce (e cambio verso una riserva). */
 .card .used { margin: 0 0 6px; font-size: 11px; color: var(--muted); }
 .card .switch { margin: 0 0 8px; padding: 6px 10px; font-size: 12px; border-radius: 8px; background: var(--fill); color: var(--text); }
+
+/* Tutta la pillola apre il menu: il <select> nativo, invisibile, la copre per intero;
+   il testo visibile è in .pill-value (aggiornato da app.js). */
+.pill-select { position: relative; }
+.pill-select select { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; opacity: 0; margin: 0; padding: 0; border-radius: 999px; field-sizing: fixed; }
+.pill-select .pill-value { font-weight: 500; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.pill-select:has(select:focus-visible) { box-shadow: 0 0 0 3px var(--ring); }

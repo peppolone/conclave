@@ -136,6 +136,14 @@ function renderOptions() {
   syncOptions();
 }
 
+/** Testo visibile delle pillole = voce scelta nel menu nascosto. */
+function updatePillValues() {
+  for (const sel of document.querySelectorAll(".pill-select select")) {
+    const v = sel.parentElement.querySelector(".pill-value");
+    if (v) v.textContent = sel.selectedOptions[0]?.textContent ?? "";
+  }
+}
+
 function syncOptions() {
   $("#rounds-select").value = String(opts.rounds);
   $("#judge").value = opts.judge === "claude" ? `claude:${opts.claudeModel}` : `m:${opts.judge}`;
@@ -146,6 +154,7 @@ function syncOptions() {
   $("#sub").innerHTML = opts.rounds === 0
     ? `I modelli rispondono in parallelo, poi <strong>${judge}</strong> emette il verdetto.`
     : `I modelli rispondono, si criticano a vicenda per ${opts.rounds} round, poi <strong>${judge}</strong> emette il verdetto.`;
+  updatePillValues();
   saveOptions();
   updateHint();
 }
