@@ -42,6 +42,7 @@ struct PhaseState: Identifiable, Equatable {
     var title: String
     var note: String?
     var cards: [CardState]
+    var startedAt: Date? = nil    // quando è iniziata la fase (solo in diretta): per "In attesa · 12 s"
 }
 
 struct DebateState: Equatable {
@@ -58,11 +59,13 @@ struct DebateState: Equatable {
     var verdict: String?
     var verdictBy: String?
     var participants: [String: (label: String, letter: String)] = [:]
+    var judging = false       // il giudice sta scrivendo il verdetto
     var isRunning: Bool { status == "running" }
 
     static func == (a: DebateState, b: DebateState) -> Bool {
         a.id == b.id && a.status == b.status && a.phases == b.phases && a.verdict == b.verdict
             && a.statusText == b.statusText && a.question == b.question && a.finishedAt == b.finishedAt
+            && a.judging == b.judging
     }
 }
 
@@ -94,6 +97,9 @@ final class CouncilStore: ObservableObject {
     var onHistoryChanged: (() -> Void)?
     var onCurrentChanged: ((Int?) -> Void)?
     var onVerdictReady: ((_ question: String) -> Void)?
+
+    /// Round aperti/chiusi scelti dall'utente, per dibattito (restano finché l'app è aperta).
+    var expandedPhases: [Int: [String: Bool]] = [:]
 
     private var stream: Task<Void, Never>?
     private var healthPoll: Task<Void, Never>?
@@ -297,14 +303,15 @@ final class CouncilStore: ObservableObject {
         case "phase":
             let phase = e["phase"] as? String ?? ""
             let note = e["note"] as? String
-            if phase == "verdict" { d.statusText = "Il giudice sta valutando…"; break }
+            if phase == "verdict" { d.statusText = "Il giudice sta valutando…"; d.judging = true; break }
             if let i = d.phases.firstIndex(where: { $0.id == phase }) {
                 if let note { d.phases[i].note = note }
             } else {
                 // Le voci ancora in gioco ricevono una card in attesa.
                 let active = note == nil ? activeIds(d) : []
                 d.phases.append(PhaseState(id: phase, title: Self.phaseTitles[phase] ?? phase, note: note,
-                                           cards: active.map { CardState(id: $0, title: title(for: $0, in: d)) }))
+                                           cards: active.map { CardState(id: $0, title: title(for: $0, in: d)) },
+                                           startedAt: .now))
             }
             d.statusText = "\(Self.phaseTitles[phase] ?? phase)…"
         case "message":
@@ -338,6 +345,7 @@ final class CouncilStore: ObservableObject {
         case "done":
             let status = e["status"] as? String ?? "done"
             d.status = status
+            d.judging = false
             d.finishedAt = .now
             d.statusText = status == "done" ? "Concluso" : (e["error"] as? String ?? status)
             if status == "done" { onVerdictReady?(d.question) }
@@ -519,5 +527,109 @@ final class CouncilStore: ObservableObject {
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return ((slug.isEmpty ? "dibattito" : String(slug.prefix(60))) + ".md", out.joined(separator: "\n"))
+    }
+}
+
+// MARK: - Fasi del dibattito (intestazioni dei round, passi, avanzamento)
+
+enum StepState: Equatable {
+    case done, current, pending, skipped, notRun, stopped
+}
+
+struct DebateStep: Identifiable, Equatable {
+    let id: String            // initial / critique / revise / final / verdict
+    let short: String         // nome breve per la riga dei passi
+    let heading: String       // "Round 1 di 3 · Critica incrociata"
+    let state: StepState
+}
+
+extension CouncilStore {
+    static let phaseShortNames = [
+        "initial": "Risposte", "critique": "Critica", "revise": "Revisione",
+        "final": "Posizione finale", "verdict": "Verdetto",
+    ]
+    static let phaseNames = [
+        "initial": "Risposte iniziali", "critique": "Critica incrociata", "revise": "Revisione",
+        "final": "Posizione finale", "verdict": "Verdetto",
+    ]
+    static let phaseDescriptions = [
+        "initial": "Ogni modello risponde alla domanda da solo, senza vedere le risposte degli altri.",
+        "critique": "Ogni modello legge le risposte anonime degli altri e ne indica errori e punti deboli.",
+        "revise": "Ogni modello rivede la propria risposta tenendo conto delle critiche ricevute.",
+        "final": "Ogni modello confronta le risposte riviste e dichiara la sua posizione definitiva.",
+        "verdict": "Il giudice legge le posizioni finali e scrive il verdetto.",
+    ]
+
+    /// Numero di round del dibattito (0–3).
+    func roundCount(_ d: DebateState) -> Int {
+        d.rounds ?? max(0, d.phases.filter { $0.id != "initial" }.count)
+    }
+
+    /// Intestazione numerata della fase: "Apertura · Risposte iniziali", "Round 2 di 3 · Revisione".
+    func phaseHeading(_ id: String, in d: DebateState) -> String {
+        let name = Self.phaseNames[id] ?? id
+        switch id {
+        case "initial": return "Apertura · \(name)"
+        case "verdict": return "Chiusura · \(name)"
+        default:
+            guard let i = Self.phaseOrder.firstIndex(of: id) else { return name }
+            return "Round \(i) di \(max(roundCount(d), i)) · \(name)"
+        }
+    }
+
+    /// Stato di una fase già comparsa nel dibattito.
+    func phaseState(_ p: PhaseState, in d: DebateState) -> StepState {
+        if p.cards.isEmpty && p.note != nil { return .skipped }
+        if p.cards.contains(where: \.waiting) { return d.isRunning ? .current : .stopped }
+        return .done
+    }
+
+    /// Passi del dibattito in ordine: risposte, round previsti, verdetto.
+    func steps(_ d: DebateState) -> [DebateStep] {
+        let ids = ["initial"] + Array(Self.phaseOrder.dropFirst().prefix(roundCount(d))) + ["verdict"]
+        var out: [DebateStep] = []
+        for (k, id) in ids.enumerated() {
+            let laterStarted = ids[(k + 1)...].contains { later in
+                later == "verdict" ? (d.judging || d.verdict != nil) : d.phases.contains { $0.id == later }
+            }
+            let state: StepState
+            if id == "verdict" {
+                if d.verdict != nil { state = .done }
+                else if d.isRunning { state = d.judging ? .current : .pending }
+                else { state = d.status == "done" ? .done : .notRun }
+            } else if let p = d.phases.first(where: { $0.id == id }) {
+                state = phaseState(p, in: d)
+            } else if laterStarted || d.status == "done" {
+                state = .skipped
+            } else {
+                state = d.isRunning ? .pending : .notRun
+            }
+            out.append(DebateStep(id: id, short: Self.phaseShortNames[id] ?? id,
+                                  heading: phaseHeading(id, in: d), state: state))
+        }
+        return out
+    }
+
+    /// Avanzamento complessivo: risposte arrivate (o concluse con errore) su risposte attese, verdetto compreso.
+    func progress(_ d: DebateState) -> (done: Int, total: Int) {
+        let active = activeCount(d)
+        var done = 0, total = 0
+        for s in steps(d) where s.id != "verdict" {
+            if let p = d.phases.first(where: { $0.id == s.id }) {
+                total += p.cards.count
+                done += p.cards.filter { !$0.waiting }.count
+            } else if s.state == .pending {
+                total += active
+            }
+        }
+        total += 1
+        if d.verdict != nil { done += 1 }
+        return (min(done, total), max(total, 1))
+    }
+
+    /// Partecipanti ancora in gioco (esclusi quelli che hanno fallito la risposta iniziale).
+    func activeCount(_ d: DebateState) -> Int {
+        let excluded = Set(d.phases.first { $0.id == "initial" }?.cards.filter { $0.error != nil }.map(\.id) ?? [])
+        return d.participants.keys.filter { !excluded.contains($0) }.count
     }
 }

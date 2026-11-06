@@ -477,9 +477,9 @@ private struct MarkdownBlockView: View {
 
         case let .quote(inner):
             HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.secondary.opacity(0.45))
-                    .frame(width: 3)
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 2)
                 AnyView(MarkdownBlocksStack(blocks: inner, baseFont: baseFont))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -495,8 +495,8 @@ private struct MarkdownBlockView: View {
                     .padding(8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
 
         case .rule:
             Divider().padding(.vertical, 4)
@@ -575,18 +575,26 @@ private struct MarkdownTableView: View {
                     cellView(cell, width: widths[col], header: true)
                 }
             }
-            .background(Color.primary.opacity(0.04))
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 0.5)
+            .background(.fill.quaternary)
+            ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                Rectangle().fill(Color(nsColor: .gridColor)).frame(height: 0.5)
                 GridRow {
                     ForEach(Array(row.enumerated()), id: \.offset) { col, cell in
                         cellView(cell, width: widths[min(col, widths.count - 1)], header: false)
                     }
                 }
+                .background(rowBackground(i))
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color(nsColor: .gridColor), lineWidth: 0.5))
+    }
+
+    /// Righe alternate (colori di sistema) solo per tabelle lunghe, dove aiutano a seguire la riga.
+    private func rowBackground(_ i: Int) -> Color {
+        let colors = NSColor.alternatingContentBackgroundColors
+        guard rows.count > 4, colors.count > 1 else { return .clear }
+        return Color(nsColor: colors[i % 2])
     }
 
     private func cellView(_ text: String, width: CGFloat, header: Bool) -> some View {
