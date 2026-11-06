@@ -35,7 +35,7 @@ function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function inline(s) {
-  return s
+  return s.replace(/&lt;br\s*\/?&gt;/gi, "<br>")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
@@ -433,6 +433,7 @@ function handle(e) {
       break;
     case "error":
       if (e.phase === "verdict") setStatus(`Giudice non disponibile (${e.error.slice(0, 120)}), provo un altro modello…`, "err");
+      else if (e.error.startsWith("ha saltato")) fillCard(e.phase, e.modelId, "", 0, `Ha saltato questo round e rientra nel prossimo: ${e.error.replace(/^ha saltato questo round \(|\)$/g, "")}`);
       else { alive.delete(e.modelId); fillCard(e.phase, e.modelId, "", 0, `Escluso dal dibattito: ${e.error}`); }
       break;
     case "done":

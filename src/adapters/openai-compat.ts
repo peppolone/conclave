@@ -14,6 +14,44 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Caratteri tipografici che alcuni modelli (GPT-OSS) usano a centinaia: spazi stretti
+ * e trattini non separabili rendono difficili ricerca e copia. Si portano a quelli normali.
+ */
+export function normalizeText(s: string): string {
+  return s
+    .replace(/[    ]/g, " ")
+    .replace(/[‐‑]/g, "-")
+    .replace(/​/g, "");
+}
+
+/** "Please try again in 22.5s" / "1m2.5s" / "750ms" → secondi (0 se assente). */
+export function parseTryAgain(msg: string): number {
+  const m = msg.match(/try again in\s+((?:\d+h)?(?:\d+m(?!s))?(?:[\d.]+s)?|[\d.]+ms)/i);
+  if (!m || !m[1]) return 0;
+  const t = m[1];
+  if (/^[\d.]+ms$/.test(t)) return Number(t.slice(0, -2)) / 1000;
+  const h = Number(t.match(/(\d+)h/)?.[1] ?? 0);
+  const min = Number(t.match(/(\d+)m(?!s)/)?.[1] ?? 0);
+  const s = Number(t.match(/([\d.]+)s/)?.[1] ?? 0);
+  return h * 3600 + min * 60 + s;
+}
+
+/** Attesa interrompibile: se il dibattito viene annullato o scade il tempo, si smette subito. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new Error("annullato"));
+    const t = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(t); reject(signal!.reason ?? new Error("annullato")); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Errore 429 che non si risolve aspettando qualche secondo. */
+export function isHardLimit(message: string): boolean {
+  return /exceeded your current quota|limit: 0\b|per day|\(RPD\)|\(TPD\)|reduce your message size|request too large/i.test(message);
+}
+
 export async function once(p: Provider, model: string, req: ChatRequest): Promise<string> {
   const key = process.env[p.keyEnv]?.trim();
   if (!key) throw new Error(`chiave ${p.keyEnv} mancante nel file .env`);
@@ -55,14 +93,16 @@ export async function once(p: Provider, model: string, req: ChatRequest): Promis
       msg = j?.error?.message ?? j?.message ?? msg;
     } catch { /* risposta non JSON */ }
     const ra = Number(res.headers.get("retry-after"));
-    throw new HttpError(res.status, `HTTP ${res.status}: ${msg}`, Number.isFinite(ra) ? ra : 0);
+    const hinted = parseTryAgain(msg);
+    throw new HttpError(res.status, `HTTP ${res.status}: ${msg}`, Number.isFinite(ra) && ra > 0 ? ra : hinted);
   }
 
-  const j = JSON.parse(raw);
+  let j: any;
+  try { j = JSON.parse(raw); } catch { throw new Error("risposta non valida dal provider (non è JSON)"); }
   const msg = j.choices?.[0]?.message;
   let text: string = typeof msg?.content === "string" ? msg.content : "";
   // Alcuni modelli di ragionamento includono il "pensiero" tra tag <think>.
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  text = normalizeText(text.replace(/<think>[\s\S]*?<\/think>/g, "")).trim();
   if (!text) throw new Error("risposta vuota dal modello");
   // Risposta tagliata dal limite di lunghezza: lo si dichiara, così giudice e utente lo sanno.
   if (j.choices?.[0]?.finish_reason === "length") text += "\n\n[…risposta troncata dal limite di lunghezza]";
@@ -89,12 +129,13 @@ export async function chatOpenAI(p: Provider, models: string[], req: ChatRequest
         if (req.signal?.aborted || !(e instanceof HttpError)) throw e;
         const busy = e.status === 429 || e.status >= 500;
         const gone = e.status === 404 || e.status === 400;
-        // Quota giornaliera esaurita (o modello escluso dal piano): riprovare tra pochi secondi è inutile.
-        const quota = e.status === 429 && /quota|limit: 0|per ?day|billing/i.test(e.message);
+        // Quota giornaliera esaurita o richiesta troppo grande: riprovare tra pochi secondi è inutile.
+        const quota = e.status === 429 && isHardLimit(e.message);
         if (busy && !quota && attempt < maxRetries) {
-          // Limite di frequenza o sovraccarico: attesa breve e nuovo tentativo.
-          const waitS = Math.min(Math.max(e.retryAfter, 5 * (attempt + 1)), 30);
-          await new Promise((r) => setTimeout(r, waitS * 1000));
+          // Limite al minuto o sovraccarico: si aspetta quanto indica il provider (max 45 s),
+          // altrimenti 5 s, 10 s… L'attesa si interrompe se scade il tempo del round.
+          const waitS = Math.min(e.retryAfter > 0 ? e.retryAfter + 0.5 : 5 * (attempt + 1), 45);
+          await sleep(waitS * 1000, req.signal);
           continue;
         }
         if ((busy || gone) && hasNext) break; // passa alla riserva

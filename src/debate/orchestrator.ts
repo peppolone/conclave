@@ -44,6 +44,10 @@ interface Debater {
 
 const LETTERS = "ABCDEFGH";
 
+/** Tempo massimo per un intervento (riserve e attese comprese): oltre, il modello salta il round. */
+const PARTICIPANT_BUDGET_MS = 75_000;
+const JUDGE_BUDGET_MS = 150_000;
+
 function shuffle<T>(a: T[]): T[] {
   const r = [...a];
   for (let i = r.length - 1; i > 0; i--) {
@@ -80,19 +84,26 @@ export async function runDebate(
   const alive = () => ds.filter((d) => d.alive);
 
   /** Esegue una fase in parallelo su tutti i partecipanti ancora attivi. */
-  async function phase(name: Phase, build: (d: Debater) => string, store: (d: Debater, t: string) => void) {
+  async function phase(name: Phase, build: (d: Debater) => string, store: (d: Debater, t: string) => void,
+                       keep?: (d: Debater) => void) {
     emit({ type: "phase", phase: name });
     await Promise.all(
       alive().map(async (d) => {
         try {
-          const r = await chat(d.def, { system: P.SYSTEM_DEBATER, user: build(d), signal });
+          // Ogni intervento ha un tempo massimo: un modello bloccato non ferma il dibattito.
+          const budget = AbortSignal.any([signal, AbortSignal.timeout(PARTICIPANT_BUDGET_MS)]);
+          const r = await chat(d.def, { system: P.SYSTEM_DEBATER, user: build(d), signal: budget });
           store(d, r.text);
           saveMessage(debateId, { model_id: d.def.id, phase: name, content: r.text, error: null, ms: r.ms });
           emit({ type: "message", phase: name, modelId: d.def.id, text: r.text, ms: r.ms });
         } catch (e) {
           if (signal.aborted) return;
-          const error = (e as Error).message;
-          d.alive = false; // chi fallisce esce dal dibattito, gli altri proseguono
+          const raw = (e as Error).name === "TimeoutError" || /abort|timeout/i.test((e as Error).message)
+            ? `nessuna risposta entro ${PARTICIPANT_BUDGET_MS / 1000} s` : (e as Error).message;
+          // Senza risposta iniziale il modello esce; nei round successivi salta il round,
+          // mantiene la posizione precedente e rientra nel round dopo.
+          let error = raw;
+          if (keep) { keep(d); error = `ha saltato questo round (${raw})`; } else d.alive = false;
           saveMessage(debateId, { model_id: d.def.id, phase: name, content: null, error, ms: null });
           emit({ type: "error", phase: name, modelId: d.def.id, error });
         }
@@ -115,12 +126,14 @@ export async function runDebate(
         "critique",
         (d) => P.critiquePrompt(question, d.initial!, others(d, (x) => x.initial), d === devil),
         (d, t) => (d.critique = t),
+        () => {},
       );
 
       if (opts.rounds >= 2) {
         // Round 2: ognuno risponde alle critiche e rivede la propria risposta.
         const allCritiques = () => alive().filter((x) => x.critique).map((x) => ({ label: x.letter, text: x.critique! }));
-        await phase("revise", (d) => P.revisePrompt(question, d.initial!, allCritiques()), (d, t) => (d.revised = t));
+        await phase("revise", (d) => P.revisePrompt(question, d.initial!, allCritiques()), (d, t) => (d.revised = t),
+          (d) => { d.revised = d.initial; });
 
         if (opts.rounds >= 3) {
           // Arresto anticipato: se nessuno ha cambiato nulla, il round 3 non aggiunge valore.
@@ -129,7 +142,8 @@ export async function runDebate(
             emit({ type: "phase", phase: "final", note: "Round 3 saltato: nessun partecipante ha cambiato posizione." });
             for (const d of alive()) d.final = d.revised;
           } else {
-            await phase("final", (d) => P.finalPrompt(question, d.revised!, others(d, (x) => x.revised)), (d, t) => (d.final = t));
+            await phase("final", (d) => P.finalPrompt(question, d.revised!, others(d, (x) => x.revised)), (d, t) => (d.final = t),
+              (d) => { d.final = d.revised; });
           }
         }
       }
@@ -152,7 +166,8 @@ export async function runDebate(
     let verdict: string | undefined;
     for (const j of judges) {
       try {
-        const r = await chat(j, { system: P.SYSTEM_JUDGE, user: judgeUser, maxTokens: 8192, signal });
+        const budget = AbortSignal.any([signal, AbortSignal.timeout(JUDGE_BUDGET_MS)]);
+        const r = await chat(j, { system: P.SYSTEM_JUDGE, user: judgeUser, maxTokens: 8192, signal: budget });
         verdict = j.id === chosenJudge.id ? r.text : `> Giudice di riserva: ${j.label} (${chosenJudge.label} non disponibile)\n\n${r.text}`;
         saveMessage(debateId, { model_id: `judge:${j.id}`, phase: "verdict", content: verdict, error: null, ms: r.ms });
         emit({ type: "message", phase: "verdict", modelId: `judge:${j.id}`, text: verdict, ms: r.ms });
