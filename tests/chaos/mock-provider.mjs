@@ -81,7 +81,7 @@ async function handle(req, res) {
   const path = new URL(req.url ?? "/", "http://x").pathname.replace(/\/+$/, "");
 
   if (req.method === "GET" && path.endsWith("/models")) {
-    return send(res, 200, { object: "list", data: MODELS.map((id) => ({ id, object: "model", owned_by: "chaos" })) });
+    return send(res, 200, { object: "list", data: [...MODELS, "paced"].map((id) => ({ id, object: "model", owned_by: "chaos" })) });
   }
   if (req.method === "GET" && path.endsWith("/stats")) {
     return send(res, 200, { calls, probes, hanging });
@@ -109,6 +109,13 @@ async function handle(req, res) {
       req.socket.setTimeout(0);
       res.on("close", () => hanging--);
       return; // non risponde mai
+    case "paced": {
+      // Per provare l'interfaccia dal vivo: 3–7 s di attesa e una risposta lunga.
+      const t = setTimeout(() => send(res, 200, completion(model, Array(6).fill(okText(model, user)).join("\n\n"))),
+        3000 + Math.random() * 4000);
+      res.on("close", () => clearTimeout(t));
+      return;
+    }
     case "slow": {
       const t = setTimeout(() => send(res, 200, completion(model, okText(model, user))), 20_000);
       res.on("close", () => clearTimeout(t));
