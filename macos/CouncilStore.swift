@@ -403,14 +403,16 @@ final class CouncilStore: ObservableObject {
            let parts = try? JSONSerialization.jsonObject(with: c) as? [[String: Any]] {
             for p in parts { if let pid = p["id"] as? String { d.participants[pid] = (p["label"] as? String ?? pid, p["letter"] as? String ?? "") } }
         }
-        current = d
-        onCurrentChanged?(id)
         if (j["live"] as? Bool) == true {
-            // Dibattito ancora in corso: lo stream riparte dall'inizio e ricostruisce tutto.
-            current?.phases = []
+            // Dibattito in corso: lo stream rimanda tutti gli eventi dall'inizio. Se lo si sta già
+            // guardando si tiene quello che c'è (niente contenuto svuotato, lo scorrimento resta dov'è).
+            if current?.id != id { current = d }
+            onCurrentChanged?(id)
             listen(id)
             return
         }
+        current = d
+        onCurrentChanged?(id)
         for m in messages {
             let mid = m["model_id"] as? String ?? ""
             let phase = m["phase"] as? String ?? ""

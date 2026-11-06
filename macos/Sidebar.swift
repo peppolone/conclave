@@ -117,6 +117,9 @@ struct SidebarView: View {
             .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
 
             List(selection: Binding(get: { model.selected }, set: { id in
+                // La lista riassegna la stessa selezione quando si aggiorna: va aperta solo
+                // una discussione diversa, altrimenti quella in corso verrebbe ricaricata.
+                guard id != model.selected else { return }
                 model.selected = id
                 if let id { model.onOpen?(id) }
             })) {

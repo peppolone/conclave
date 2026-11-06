@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 
 export const MODELS = [
   "ok-a", "ok-b", "hang", "slow", "ratelimit", "quota", "crash500",
-  "empty", "huge", "html", "flaky-critique", "length", "gone",
+  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm",
 ];
 
 const calls = Object.create(null);   // chiamate di chat per modello (prove escluse)
@@ -140,6 +140,12 @@ async function handle(req, res) {
       return send(res, 200, completion(model, okText(model, user)));
     case "length":
       return send(res, 200, completion(model, okText(model, user), "length"));
+    case "otpm": {
+      // Come Qwen su Groq gratis: rifiuta max_tokens oltre 1000.
+      const mt = Number(body.max_tokens ?? 0);
+      if (!mt || mt > 1000) return send(res, 429, err(`Request too large for model \`otpm\` in organization org-chaos service tier \`on_demand\` on output tokens per minute (OTPM): Limit 1000, Requested ${mt || 4096}. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again.`, "tokens"));
+      return send(res, 200, completion(model, okText(model, user)));
+    }
     case "gone":
       return send(res, 404, err(`The model \`${model}\` does not exist or you do not have access to it. model not found`, "invalid_request_error"));
     default:

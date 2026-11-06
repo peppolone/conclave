@@ -364,7 +364,34 @@ SCENARIOS.m = async function m() {
   return [true, `done, risposta della riserva ok-b${msg.replaced ? ` al posto di ${msg.replaced}` : ""} in ${(msg.ms / 1000).toFixed(0)} s`, r.secs];
 };
 
+// La voce resta sulla riserva: dopo il primo timeout il modello bloccato non viene più chiamato.
+SCENARIOS.n = async function n() {
+  const max = 200;
+  const r = await debate("n", ["ok-a", "voce"], 2, "ok-a", max * 1000);
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const msgs = r.state.messages.filter((x) => x.model_id === "voce" && x.content);
+  if (msgs.length < 3) return [false, `la voce ha risposto in ${msgs.length} fasi su 3`, r.secs];
+  // Dopo la prima fase la voce deve usare subito la riserva: niente nuove attese da 35 s.
+  const later = msgs.filter((x) => x.phase !== "initial");
+  const slow = later.filter((x) => (x.ms ?? 0) > 10_000 || x.model_used !== "ok-b");
+  if (slow.length) return [false, `nei round successivi la voce ha riatteso o cambiato modello: ${slow.map((x) => `${x.phase} ${x.model_used} ${Math.round(x.ms / 1000)} s`).join(", ")}`, r.secs];
+  return [true, `done in ${r.secs.toFixed(0)} s, dopo il primo timeout la voce resta su ok-b (round successivi ${later.map((x) => Math.round(x.ms) + " ms").join(", ")})`, r.secs];
+};
+
+// Limite di token in uscita (Qwen su Groq): l'app abbassa max_tokens e riprova subito.
+SCENARIOS.o = async function o() {
+  const max = 60;
+  const r = await debate("o", ["ok-a", "otpm"], 1, "ok-a", max * 1000);
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const ok = r.state.messages.filter((x) => x.model_id === "otpm" && x.content).length;
+  if (ok < 2) return [false, `otpm ha risposto in ${ok} fasi su 2 (errori: ${errMsgs(r.state, "otpm").map((m) => m.error.slice(0, 60)).join("; ")})`, r.secs];
+  return [true, `done, otpm ha risposto in tutte le fasi abbassando max_tokens`, r.secs];
+};
+
 const DESCR = {
+  n: "voce resta sulla riserva", o: "limite token in uscita (OTPM)",
   m: "voce di famiglia: riserva se il principale si blocca",
   a: "ok-a + ok-b, 3 round", b: "ok-a + ok-b + hang, 2 round", b2: "un solo modello rimasto", c: "flaky-critique rientra", d: "ratelimit con attesa",
   e: "giudice hang → riserva", f: "html non alterato", g: "empty/crash500/gone esclusi", h: "huge 300k caratteri",

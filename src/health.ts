@@ -14,6 +14,31 @@ export interface Health {
 }
 
 const health = new Map<string, Health>();
+
+/**
+ * Una variante ha risposto dopo che quelle prima di lei nella catena hanno fallito:
+ * diventa la prima scelta della voce (per i round successivi e i prossimi dibattiti),
+ * le varianti fallite scivolano in fondo. Si evita così di riattendere ogni volta il timeout.
+ */
+/** Modello lento o sparito: va in fondo alla catena della voce (resta come ultima riserva). */
+export function demote(voiceId: string, model: string): void {
+  const h = health.get(voiceId);
+  if (!h?.chain || h.chain.length < 2 || !h.chain.includes(model)) return;
+  h.chain = [...h.chain.filter((x) => x !== model), model];
+  if (h.using === model) h.using = h.chain[0];
+  health.set(voiceId, h);
+}
+
+export function promote(voiceId: string, model: string, failed: string[]): void {
+  const h = health.get(voiceId);
+  if (!h) return;
+  const chain = h.chain ?? [];
+  const rest = chain.filter((x) => x !== model && !failed.includes(x));
+  h.using = model;
+  h.chain = [model, ...rest, ...failed.filter((x) => x !== model)];
+  h.note = `${failed[0]} non ha risposto: la voce ora usa ${model}`;
+  health.set(voiceId, h);
+}
 let running: Promise<void> | null = null;
 
 export function getHealth(id: string): Health {

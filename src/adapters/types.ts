@@ -3,6 +3,8 @@ export interface ChatRequest {
   user: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Un modello della catena non ha risposto in tempo o non esiste più (per spostarlo in fondo). */
+  onModelFail?: (model: string) => void;
 }
 
 export interface ChatResult {

@@ -48,6 +48,19 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Tetto di token in uscita imparato per modello: alcuni piani gratuiti (es. Qwen su Groq,
+ * 1.000 token/minuto) rifiutano le richieste con max_tokens più alto del loro limite.
+ */
+const outputCap = new Map<string, number>();
+
+/** "…expected output tokens exceed… Limit 1000…" → tetto da usare (80% del limite), o 0. */
+export function outputLimitFrom(message: string): number {
+  if (!/reduce max_tokens|expected output tokens exceed|max_tokens.*(too large|exceed)/i.test(message)) return 0;
+  const lim = Number(message.match(/Limit\s+(\d+)/i)?.[1] ?? 0);
+  return lim > 0 ? Math.max(200, Math.floor(lim * 0.8)) : 0;
+}
+
 /** Errore 429 che non si risolve aspettando qualche secondo. */
 export function isHardLimit(message: string): boolean {
   return /exceeded your current quota|limit: 0\b|per day|\(RPD\)|\(TPD\)|reduce your message size|request too large/i.test(message);
@@ -76,7 +89,7 @@ export async function once(p: Provider, model: string, req: ChatRequest, timeout
         { role: "user", content: req.user },
       ],
       // Margine ampio: nei modelli che "ragionano" anche il ragionamento consuma questo limite.
-      max_tokens: req.maxTokens ?? 4096,
+      max_tokens: Math.min(req.maxTokens ?? 4096, outputCap.get(model) ?? Infinity),
       temperature: 0.6,
       // Parametri specifici del provider (es. Gemini: ragionamento leggero), da models.json.
       ...(p.extraBody ?? {}),
@@ -131,12 +144,20 @@ export async function chatOpenAI(p: Provider, models: string[], req: ChatRequest
         if (req.signal?.aborted) throw e;
         // Modello che non risponde in tempo o risposta illeggibile: si passa alla riserva, se c'è.
         if (!(e instanceof HttpError)) {
+          req.onModelFail?.(model);
           if (hasNext) break;
           throw e;
         }
+        if (e.status === 404) req.onModelFail?.(model);
         const busy = e.status === 429 || e.status >= 500;
         const gone = e.status === 404 || e.status === 400;
         // Quota giornaliera esaurita o richiesta troppo grande: riprovare tra pochi secondi è inutile.
+        // Il provider dice che l'uscita richiesta è oltre il suo limite: si abbassa e si riprova subito.
+        const cap = outputLimitFrom(e.message);
+        if (cap > 0 && (outputCap.get(model) ?? Infinity) > cap) {
+          outputCap.set(model, cap);
+          continue;
+        }
         const quota = e.status === 429 && isHardLimit(e.message);
         if (busy && !quota && attempt < maxRetries) {
           // Limite al minuto o sovraccarico: si aspetta quanto indica il provider (max 45 s),
