@@ -16,3 +16,7 @@ DerivedData/
 xcuserdata/
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Note di lavoro e piani: solo in locale, non su GitHub
+/CLAUDE.md
+/docs/
