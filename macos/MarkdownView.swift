@@ -558,14 +558,36 @@ private struct MarkdownTableView: View {
         }
     }
 
+    /// Larghezza disponibile, misurata dal contenitore.
+    @State private var available: CGFloat = 0
+
+    /// Colonne ridotte in proporzione per stare nella larghezza disponibile (il testo va a capo);
+    /// solo se non bastano 90 pt per colonna la tabella scorre in orizzontale.
+    private func fitted(_ widths: [CGFloat]) -> [CGFloat] {
+        let total = widths.reduce(0, +)
+        guard available > 0, total > available else { return widths }
+        let minimum: CGFloat = 90
+        let free = available - minimum * CGFloat(widths.count)
+        guard free > 0 else { return widths.map { max($0 * available / total, minimum) } }
+        let extra = widths.map { max($0 - minimum, 0) }
+        let extraTotal = max(extra.reduce(0, +), 1)
+        return extra.map { (minimum + $0 * free / extraTotal).rounded(.down) }
+    }
+
     var body: some View {
-        let widths = columnWidths
-        ViewThatFits(in: .horizontal) {
-            table(widths)
-            ScrollView(.horizontal, showsIndicators: true) {
-                table(widths).padding(.bottom, 4)
+        let widths = fitted(columnWidths)
+        Group {
+            if available > 0, widths.reduce(0, +) > available + 1 {
+                ScrollView(.horizontal) {
+                    table(widths).padding(.bottom, 8)
+                }
+                .scrollIndicators(.visible)
+            } else {
+                table(widths)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
     }
 
     private func table(_ widths: [CGFloat]) -> some View {
@@ -578,6 +600,7 @@ private struct MarkdownTableView: View {
             .background(.fill.quaternary)
             ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
                 Rectangle().fill(Color(nsColor: .gridColor)).frame(height: 0.5)
+                    .gridCellUnsizedAxes(.horizontal)   // il divisore non allarga la tabella
                 GridRow {
                     ForEach(Array(row.enumerated()), id: \.offset) { col, cell in
                         cellView(cell, width: widths[min(col, widths.count - 1)], header: false)
@@ -604,6 +627,8 @@ private struct MarkdownTableView: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
+            // Ogni cella riempie l'altezza della riga: sfondi di riga uniformi.
             .frame(width: width, alignment: .leading)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 }
