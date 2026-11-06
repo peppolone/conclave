@@ -284,7 +284,7 @@ final class ModelsModel: ObservableObject {
     }
 
     func providerName(_ id: String?) -> String {
-        guard let id else { return "Abbonamento Claude Pro" }
+        guard let id else { return "Abbonamento Claude (Claude Code)" }
         return providers.first { $0.id == id }?.name ?? id
     }
 
@@ -298,21 +298,28 @@ final class ModelsModel: ObservableObject {
 
 // MARK: - Interfaccia
 
-private func statusColor(_ s: String?) -> Color {
+/// Simbolo e colore di uno stato: il colore sta solo sul simbolo, il significato nel testo.
+private func statusSymbol(_ s: String?) -> (String, Color) {
     switch s {
-    case "ok": return .green
-    case "busy", "checking": return .orange
-    case "down", "quota", "gone", "auth", "error": return .red
-    default: return .secondary
+    case "ok": return ("checkmark.circle.fill", .green)
+    case "checking": return ("clock", .secondary)
+    case "busy": return ("hourglass", .orange)
+    case "nokey": return ("key", .secondary)
+    case "down", "quota", "gone", "auth", "error": return ("xmark.circle.fill", .red)
+    default: return ("circle.dashed", .secondary)
     }
 }
 
 private func statusText(_ h: HealthDTO?) -> String {
     switch h?.status {
     case "ok": return "Risponde"
-    case "checking": return "Verifica in corso…"
+    case "checking": return "Verifica in corso"
     case "busy": return "Sovraccarico"
     case "down": return "Non risponde"
+    case "quota": return "Quota esaurita"
+    case "gone": return "Ritirato dal provider"
+    case "auth": return "Chiave non valida"
+    case "error": return "Errore"
     case "nokey": return "Manca la chiave"
     default: return "Non verificato"
     }
@@ -320,12 +327,12 @@ private func statusText(_ h: HealthDTO?) -> String {
 
 private func probeText(_ p: ProbeDTO) -> String {
     switch p.status {
-    case "ok": return "Risponde · \(String(format: "%.1f", Double(p.ms) / 1000)) s"
+    case "ok": return "Risponde in \(String(format: "%.1f", Double(p.ms) / 1000)) s"
     case "busy": return "Sovraccarico ora, riprova più tardi"
-    case "quota": return "Non incluso nel piano gratuito / quota esaurita"
+    case "quota": return "Non incluso nel piano gratuito o quota esaurita"
     case "gone": return "Non disponibile per il tuo account"
     case "auth": return "Chiave non valida"
-    default: return p.message ?? "Errore"
+    default: return "Non risponde: \(p.message ?? "errore sconosciuto")"
     }
 }
 
@@ -342,16 +349,95 @@ private func dateText(_ s: Double?) -> String? {
     return f.string(from: Date(timeIntervalSince1970: s))
 }
 
-struct Badge: View {
+/// Stato con simbolo + testo.
+private struct StatusLabel: View {
     let text: String
-    let color: Color
+    let status: String?
     var body: some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
-            .fixedSize()
+        let (symbol, color) = statusSymbol(status)
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(color)
+        }
+        .fixedSize()
+    }
+}
+
+/// Etichetta di contenuto del catalogo: testo sempre presente, sfondo neutro, colore solo sul simbolo.
+struct Badge: View {
+    enum Kind { case free, paid, unknown, recommended }
+    let kind: Kind
+
+    private var text: String {
+        switch kind {
+        case .free: return "Gratis"
+        case .paid: return "A pagamento"
+        case .unknown: return "Costo da verificare"
+        case .recommended: return "Consigliato"
+        }
+    }
+
+    private var symbol: (String, Color) {
+        switch kind {
+        case .free: return ("gift", .green)
+        case .paid: return ("creditcard", .orange)
+        case .unknown: return ("questionmark.circle", .secondary)
+        case .recommended: return ("star.fill", .accentColor)
+        }
+    }
+
+    var body: some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: symbol.0).foregroundStyle(symbol.1).imageScale(.small)
+        }
+        .font(.caption.weight(.medium))
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(.fill.tertiary, in: Capsule())
+        .fixedSize()
+    }
+
+    static func cost(_ free: Bool?) -> Badge {
+        switch free {
+        case .some(true): return Badge(kind: .free)
+        case .some(false): return Badge(kind: .paid)
+        case .none: return Badge(kind: .unknown)
+        }
+    }
+}
+
+/// Campo di ricerca nativo (NSSearchField), con la lente e il pulsante per svuotarlo.
+struct NativeSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let f = NSSearchField()
+        f.placeholderString = prompt
+        f.setAccessibilityLabel(prompt)
+        f.sendsSearchStringImmediately = true
+        f.delegate = context.coordinator
+        f.target = context.coordinator
+        f.action = #selector(Coordinator.changed(_:))
+        return f
+    }
+
+    func updateNSView(_ f: NSSearchField, context: Context) {
+        if f.stringValue != text { f.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    @MainActor
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        @objc func changed(_ sender: NSSearchField) { text.wrappedValue = sender.stringValue }
+        func controlTextDidChange(_ n: Notification) {
+            if let f = n.object as? NSSearchField { text.wrappedValue = f.stringValue }
+        }
     }
 }
 
@@ -365,8 +451,11 @@ struct ModelsTab: View {
     var body: some View {
         VStack(spacing: 0) {
             if let err = model.engineError {
-                VStack(spacing: 12) {
-                    Text(err).foregroundStyle(.secondary)
+                ContentUnavailableView {
+                    Label("Motore non pronto", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(err)
+                } actions: {
                     Button("Riprova") { Task { await model.load() } }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -381,10 +470,12 @@ struct ModelsTab: View {
             HStack {
                 let n = model.selection.models.count
                 Text(n == 1 ? "1 voce nel consiglio" : "\(n) voci nel consiglio").foregroundStyle(.secondary)
-                if let saveError { Text(saveError).foregroundStyle(.red).lineLimit(1) }
+                if let saveError {
+                    Text(saveError).foregroundStyle(.red).lineLimit(1).textSelection(.enabled)
+                }
                 Spacer()
+                // Senza Esc: nel campo di ricerca Esc deve solo svuotarlo.
                 Button("Annulla") { Task { await model.load() }; close() }
-                    .keyboardShortcut(.cancelAction)
                 Button(saving ? "Salvataggio…" : "Salva e attiva") {
                     saving = true
                     Task {
@@ -397,42 +488,37 @@ struct ModelsTab: View {
             }
             .padding(14)
         }
+        .frame(width: settingsPanelSize.width, height: settingsPanelSize.height)
     }
 
     // MARK: Voci del consiglio
 
     private var councilSection: some View {
         Section {
-            Toggle(isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Scelta automatica all'avvio")
-                    Text("All'apertura l'app prova ogni voce. Se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
             ForEach(model.selection.models) { m in voiceRow(m) }
 
-            HStack {
+            HStack(spacing: 8) {
                 if !model.selection.models.contains(where: { $0.kind == "claude-cli" }) {
                     Button("Aggiungi Claude") { model.addClaude() }
                 }
                 Spacer()
                 if model.checking {
                     ProgressView().controlSize(.small)
-                    Text("Verifica dei modelli in corso…").font(.caption).foregroundStyle(.secondary)
+                    Text("Verifica dei modelli in corso…").foregroundStyle(.secondary)
                 }
                 Button("Aggiorna stato") { Task { await model.refreshHealth() } }
-                    .buttonStyle(.borderless)
+            }
+
+            Toggle(isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) })) {
+                Text("Scelta automatica all'avvio")
+                Text("All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.")
             }
         } header: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Voci del consiglio")
-                Text("Ogni voce è una famiglia di modelli. Con «Automatico» l'app usa il migliore disponibile e, se non risponde, passa da sola a un'altra variante della stessa famiglia.")
-                    .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Voci del consiglio")
+        } footer: {
+            Text("Ogni voce è una famiglia di modelli. Con “Automatico” l'app usa la variante migliore che risponde e tiene le altre come riserva. “Partecipa di default” la preseleziona nelle nuove discussioni.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -448,36 +534,37 @@ struct ModelsTab: View {
     @ViewBuilder
     private func voiceRow(_ m: SelModel) -> some View {
         let h = model.health[m.id]
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 10) {
-                Circle().fill(statusColor(h?.status)).frame(width: 9, height: 9).padding(.top, 5)
-                    .help(statusText(h))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(m.label).font(.body.weight(.medium))
+                    Text(m.label).font(.headline)
                     Text(voiceDetail(m, h))
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    if let note = h?.note {
-                        Text(note).font(.caption).foregroundStyle(h?.status == "ok" ? Color.orange : Color.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else if h?.status == "nokey" {
-                        Text("Manca la chiave API: aggiungila nella scheda “Chiavi API”")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
                 Spacer()
-                Button(role: .destructive) { model.remove(m) } label: { Image(systemName: "minus.circle") }
-                    .buttonStyle(.borderless)
-                    .help("Togli dal consiglio")
+                StatusLabel(text: statusText(h), status: h?.status)
+            }
+            if let note = h?.note {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            } else if h?.status == "nokey" {
+                Text("Aggiungi la chiave API nel pannello “Chiavi API”.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
-                Text("Modello").foregroundStyle(.secondary)
+                Text("Modello")
                 modelPicker(m)
                 Spacer()
-                Toggle("Spuntato di default", isOn: Binding(get: { m.default ?? false }, set: { model.setDefault(m, $0) }))
+                Toggle("Partecipa di default", isOn: Binding(get: { m.default ?? false }, set: { model.setDefault(m, $0) }))
                     .toggleStyle(.checkbox)
                     .fixedSize()
+                Button("Rimuovi", role: .destructive) { model.remove(m) }
+                    .help("Togli \(m.label) dal consiglio")
             }
-            .padding(.leading, 19)
+        }
+        .padding(.vertical, 2)
+        .contextMenu {
+            Button("Rimuovi dal consiglio", role: .destructive) { model.remove(m) }
         }
     }
 
@@ -511,85 +598,109 @@ struct ModelsTab: View {
         Section {
             let withKey = model.providers.filter(\.hasKey)
             if withKey.isEmpty {
-                Text("Nessun provider configurato. Aggiungi una chiave nella scheda “Chiavi API”.")
-                    .foregroundStyle(.secondary)
+                Label {
+                    Text("Nessun provider configurato. Aggiungi una chiave gratuita nel pannello “Chiavi API”.")
+                } icon: {
+                    Image(systemName: "key").foregroundStyle(.secondary)
+                }
+                .foregroundStyle(.secondary)
             } else {
                 Picker("Provider", selection: $model.provider) {
                     ForEach(withKey) { p in Text(p.name).tag(p.id) }
                 }
                 .onChange(of: model.provider) { _, _ in Task { await model.loadCatalog() } }
 
-                // Etichette nascoste dentro la Form: altrimenti occupano una colonna e il testo va a capo.
-                HStack(spacing: 12) {
-                    TextField("Cerca", text: $model.search, prompt: Text("Cerca una famiglia o un modello…"))
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 160, maxWidth: .infinity)
-                    Toggle("Solo gratuiti", isOn: $model.onlyFree)
-                        .toggleStyle(.checkbox)
-                        .fixedSize()
-                    Button { Task { await model.loadCatalog(fresh: true) } } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless).help("Ricarica il catalogo")
+                LabeledContent("Cerca") {
+                    NativeSearchField(text: $model.search, prompt: "Cerca una famiglia o un modello")
+                        .frame(minWidth: 220, maxWidth: 320)
                 }
 
+                Toggle("Mostra solo modelli gratuiti", isOn: $model.onlyFree)
+
                 let families = model.visibleFamilies
-                if model.loadingCatalog {
-                    HStack { ProgressView().controlSize(.small); Text("Carico il catalogo…").foregroundStyle(.secondary) }
-                } else if let e = model.catalogError {
-                    Text("Catalogo non disponibile: \(e)").foregroundStyle(.red)
-                } else if families.isEmpty {
-                    Text("Nessuna famiglia corrisponde ai filtri.").foregroundStyle(.secondary)
-                } else {
-                    ForEach(families) { f in familyRow(f) }
+                HStack(spacing: 8) {
+                    if model.loadingCatalog {
+                        ProgressView().controlSize(.small)
+                        Text("Carico i modelli di \(model.providerName(model.provider))…").foregroundStyle(.secondary)
+                    } else if let e = model.catalogError {
+                        Label {
+                            Text("Catalogo non disponibile: \(e)").textSelection(.enabled)
+                        } icon: {
+                            Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                        }
+                    } else {
+                        Text(families.count == 1 ? "1 famiglia" : "\(families.count) famiglie")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Ricarica catalogo") { Task { await model.loadCatalog(fresh: true) } }
+                        .disabled(model.loadingCatalog)
+                }
+
+                if !model.loadingCatalog && model.catalogError == nil {
+                    if families.isEmpty {
+                        Text("Nessuna famiglia corrisponde alla ricerca o ai filtri.").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(families) { f in familyRow(f) }
+                    }
                 }
             }
         } header: {
             Text("Aggiungi una voce")
         } footer: {
-            Text("“Consigliato” è una stima basata su versione, data e dimensione del modello: i provider non pubblicano una classifica. Usa “Prova” per sapere se un modello risponde davvero con il tuo account.")
+            Text("I modelli “Gratis” non costano nulla: con “Mostra solo modelli gratuiti” attivo vedi solo quelli. “Consigliato” è una stima basata su versione, data e dimensione del modello; usa “Prova” per sapere se un modello risponde davvero con il tuo account.")
                 .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func familyCost(_ f: ModelFamily) -> Badge {
+        if f.items.contains(where: { $0.free == true }) { return Badge(kind: .free) }
+        if f.items.allSatisfy({ $0.free == false }) { return Badge(kind: .paid) }
+        return Badge(kind: .unknown)
     }
 
     @ViewBuilder
     private func familyRow(_ f: ModelFamily) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(f.label).font(.body.weight(.medium)).lineLimit(1)
-                        if f.best.recommended { Badge(text: "★ Consigliato", color: .blue) }
-                        if f.items.contains(where: { $0.free == true }) {
-                            Badge(text: "Gratis", color: .green)
-                        } else if f.items.allSatisfy({ $0.free == false }) {
-                            Badge(text: "A pagamento", color: .red)
-                        } else {
-                            Badge(text: "Da verificare", color: .orange)
-                        }
+                        Text(f.label).font(.headline).lineLimit(1)
+                        familyCost(f)
+                        if f.best.recommended { Badge(kind: .recommended) }
                     }
-                    Text("\(f.items.count == 1 ? "1 modello" : "\(f.items.count) modelli") · migliore: \(f.best.name)")
+                    Text("Migliore: \(f.best.name)")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
                 if model.isVoice(f) {
-                    Text("Nel consiglio").font(.caption).foregroundStyle(.secondary).fixedSize().frame(minWidth: 82)
+                    Label {
+                        Text("Nel consiglio")
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                    .foregroundStyle(.secondary).fixedSize()
                 } else {
-                    Button("Aggiungi") { model.addFamily(f) }.fixedSize().frame(minWidth: 82)
+                    Button("Aggiungi") { model.addFamily(f) }
+                        .help("Aggiungi \(f.label) come voce del consiglio")
+                        .fixedSize()
                 }
             }
-            DisclosureGroup("Mostra i modelli", isExpanded: Binding(
+            DisclosureGroup(f.items.count == 1 ? "Mostra il modello" : "Mostra i \(f.items.count) modelli",
+                            isExpanded: Binding(
                 get: { expanded.contains("\(model.provider)/\(f.id)") },
                 set: { on in
                     let k = "\(model.provider)/\(f.id)"
                     if on { expanded.insert(k) } else { expanded.remove(k) }
                 })) {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     ForEach(f.items) { item in variantRow(item) }
                 }
                 .padding(.top, 4)
             }
-            .font(.caption)
         }
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -598,31 +709,33 @@ struct ModelsTab: View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(item.name).font(.body).lineLimit(1)
-                    if item.recommended { Badge(text: "★ Consigliato", color: .blue) }
-                    switch item.free {
-                    case .some(true): Badge(text: "Gratis", color: .green)
-                    case .some(false): Badge(text: "A pagamento", color: .red)
-                    case .none: Badge(text: "Da verificare", color: .orange)
-                    }
+                    Text(item.name).lineLimit(1)
+                    Badge.cost(item.free)
+                    if item.recommended { Badge(kind: .recommended) }
                 }
                 Text([item.id, dateText(item.created), shortContext(item.context)].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 if let note = item.freeNote {
-                    Text(note).font(.caption).foregroundStyle(item.free == false ? Color.red : Color.secondary)
+                    Text(note).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let p = model.probes[key] {
-                    Label(probeText(p), systemImage: p.status == "ok" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(statusColor(p.status))
+                    StatusLabel(text: probeText(p), status: p.status == "ok" ? "ok" : (p.status == "busy" ? "busy" : "error"))
+                        .font(.caption)
                 }
             }
             .help(item.description ?? item.freeNote ?? "")
             Spacer()
             if model.probing.contains(key) {
-                ProgressView().controlSize(.small)
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Prova in corso").font(.caption).foregroundStyle(.secondary)
+                }
             } else {
-                Button("Prova") { model.probe(item) }.fixedSize()
+                Button("Prova") { model.probe(item) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Manda una richiesta minima per vedere se risponde con il tuo account")
             }
         }
     }

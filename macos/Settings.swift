@@ -1,4 +1,5 @@
-// Finestra Impostazioni: inserimento delle chiavi API con guida passo passo per ogni provider.
+// Finestra Impostazioni: pannelli "Chiavi API" e "Modelli" in una toolbar di pannelli
+// (NSTabViewController, stile .toolbar), come le Impostazioni delle app di sistema.
 
 import AppKit
 import SwiftUI
@@ -8,76 +9,82 @@ import SwiftUI
 struct ProviderGuide: Identifiable {
     let id: String          // chiave in models.json → providers
     let name: String
-    let models: String      // modelli che sblocca
+    let free: Bool          // false: solo a pagamento
+    let optional: Bool      // non serve per un consiglio gratuito completo
+    let unlocks: String     // voci che sblocca
+    let summary: String     // una riga: costo e condizioni
     let url: URL
     let steps: [String]
-    let note: String
+    let note: String        // dettagli (quote, privacy), dentro la guida
 }
 
 let providerGuides: [ProviderGuide] = [
     ProviderGuide(
-        id: "gemini", name: "Google Gemini",
-        models: "Voce Gemini (Flash, Flash Lite, Gemma come riserve)",
+        id: "gemini", name: "Google Gemini", free: true, optional: false,
+        unlocks: "Voce Gemini (Flash, Flash Lite e Gemma come riserve)",
+        summary: "Gratis, senza carta di credito.",
         url: URL(string: "https://aistudio.google.com/apikey")!,
         steps: [
-            "Apri Google AI Studio con il pulsante qui sotto e accedi con il tuo account Google.",
-            "Accetta i termini di servizio, se richiesto.",
-            "Clicca “Create API key” (Crea chiave API) e, se te lo chiede, scegli o crea un progetto.",
-            "Copia la chiave (inizia con “AIza…”) e incollala nel campo qui sotto.",
+            "Apri Google AI Studio e accedi con il tuo account Google (accetta i termini, se li chiede).",
+            "Clicca “Create API key”; se lo chiede, scegli o crea un progetto.",
+            "Copia la chiave (inizia con “AIza”) e incollala nel campo qui sopra.",
         ],
-        note: "Gratuito ma con quote basse: i Gemini Flash circa 20 richieste al giorno (un dibattito completo ne usa 4), i Flash Lite circa 500, Gemma circa 14.000. Finita la quota l'app passa da sola al modello successivo. I Pro non sono inclusi. Nel piano gratuito Google può usare i dati per migliorare i suoi modelli: non inserire informazioni riservate."),
+        note: "Quote gratuite basse: Gemini Flash circa 20 richieste al giorno (un dibattito ne usa 4), Flash Lite circa 500, Gemma circa 14.000. Finita una quota l'app passa da sola al modello successivo. Nel piano gratuito Google può usare i dati per migliorare i suoi modelli: non inserire informazioni riservate."),
     ProviderGuide(
-        id: "groq", name: "Groq",
-        models: "Voci GPT-OSS e Qwen",
+        id: "groq", name: "Groq", free: true, optional: false,
+        unlocks: "Voci GPT-OSS e Qwen",
+        summary: "Gratis, senza carta di credito, molto veloce.",
         url: URL(string: "https://console.groq.com/keys")!,
         steps: [
             "Apri la console Groq e registrati (va bene anche l'account Google).",
-            "Nel menu “API Keys” clicca “Create API Key” e dagli un nome, es. “AI Council”.",
-            "Copia subito la chiave (inizia con “gsk_…”): Groq la mostra una sola volta.",
-            "Incollala nel campo qui sotto.",
+            "In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “AI Council”.",
+            "Copia subito la chiave (inizia con “gsk_”, Groq la mostra una sola volta) e incollala qui sopra.",
         ],
-        note: "Gratuito senza carta di credito, molto veloce. Ha limiti al minuto: con troppi modelli insieme l'app aspetta e riprova da sola."),
+        note: "Ha limiti al minuto: con molti modelli insieme l'app aspetta e riprova da sola."),
     ProviderGuide(
-        id: "openrouter", name: "OpenRouter",
-        models: "DeepSeek e gli altri modelli “:free”",
+        id: "openrouter", name: "OpenRouter", free: true, optional: false,
+        unlocks: "Modelli gratuiti “:free” (per esempio Nemotron e DeepSeek)",
+        summary: "Gratis con i modelli “:free”, senza credito.",
         url: URL(string: "https://openrouter.ai/settings/keys")!,
         steps: [
             "Apri OpenRouter e registrati.",
-            "In “Keys” clicca “Create Key”; come limite di credito puoi lasciare 0 per non spendere mai nulla.",
-            "Copia la chiave (inizia con “sk-or-…”) e incollala nel campo qui sotto.",
+            "In “Keys” clicca “Create Key”; come limite di credito lascia 0 per non spendere mai nulla.",
+            "Copia la chiave (inizia con “sk-or-”) e incollala qui sopra.",
         ],
-        note: "Usiamo solo i modelli gratuiti (quelli con “:free” nel nome). Senza credito il numero di richieste al giorno è basso."),
+        note: "L'app usa solo i modelli gratuiti, quelli con “:free” nel nome. Senza credito le richieste al giorno sono poche e alcuni modelli sono lenti."),
     ProviderGuide(
-        id: "mistral", name: "Mistral (facoltativo)",
-        models: "Mistral Small",
+        id: "mistral", name: "Mistral", free: true, optional: true,
+        unlocks: "Voce Mistral Small",
+        summary: "Gratis con limiti (piano “Experiment”).",
         url: URL(string: "https://console.mistral.ai/api-keys")!,
         steps: [
             "Apri la console Mistral e registrati.",
             "Scegli il piano gratuito “Experiment” (chiede di verificare il numero di telefono).",
-            "In “API Keys” clicca “Create new key”, poi copia la chiave.",
-            "Incollala nel campo qui sotto.",
+            "In “API Keys” clicca “Create new key”, copia la chiave e incollala qui sopra.",
         ],
-        note: "Gratuito con limiti. Utile come voce europea in più nel consiglio."),
+        note: "Utile come voce europea in più nel consiglio."),
     ProviderGuide(
-        id: "cerebras", name: "Cerebras (facoltativo)",
-        models: "GPT-OSS, Qwen, Llama e altri modelli open, molto veloci",
+        id: "cerebras", name: "Cerebras", free: true, optional: true,
+        unlocks: "GPT-OSS, Qwen, Llama e altri modelli open, molto veloci",
+        summary: "Gratis con limiti giornalieri.",
         url: URL(string: "https://cloud.cerebras.ai")!,
         steps: [
             "Apri Cerebras Cloud e registrati.",
-            "Nel menu “API Keys” crea una nuova chiave e copiala (inizia con “csk-…”).",
-            "Incollala nel campo qui sotto, poi scegli i modelli nella scheda “Modelli”.",
+            "In “API Keys” crea una nuova chiave e copiala (inizia con “csk-”).",
+            "Incollala qui sopra, poi scegli i modelli nel pannello “Modelli”.",
         ],
-        note: "Piano gratuito con limiti giornalieri. Utile come alternativa a Groq per gli stessi modelli open."),
+        note: "Un'alternativa a Groq per gli stessi modelli open."),
     ProviderGuide(
-        id: "openai", name: "OpenAI – ChatGPT (a pagamento)",
-        models: "GPT ufficiali di OpenAI",
+        id: "openai", name: "OpenAI", free: false, optional: true,
+        unlocks: "Modelli GPT ufficiali di OpenAI",
+        summary: "Solo a pagamento: l'abbonamento ChatGPT non include le API.",
         url: URL(string: "https://platform.openai.com/api-keys")!,
         steps: [
-            "Attenzione: l'abbonamento ChatGPT (anche gratuito) non include le API, e OpenAI non offre più crediti gratuiti garantiti.",
-            "Se vuoi comunque usarlo: apri la piattaforma OpenAI, aggiungi credito in “Billing”.",
-            "In “API keys” clicca “Create new secret key”, copia la chiave (inizia con “sk-…”) e incollala qui.",
+            "Apri la piattaforma OpenAI e aggiungi credito in “Billing”.",
+            "In “API keys” clicca “Create new secret key”.",
+            "Copia la chiave (inizia con “sk-”) e incollala qui sopra.",
         ],
-        note: "Per avere GPT gratis usa GPT-OSS, il modello open di OpenAI, tramite Groq, Cerebras o OpenRouter."),
+        note: "Per avere GPT gratis non serve questa chiave: GPT-OSS, il modello open di OpenAI, è disponibile gratis con Groq, Cerebras o OpenRouter."),
 ]
 
 // MARK: - File .env
@@ -176,6 +183,8 @@ final class SettingsModel: ObservableObject {
 
     var configuredCount: Int { keys.values.filter { !$0.isEmpty }.count }
 
+    func hasKey(_ id: String) -> Bool { !(keys[id] ?? "").isEmpty }
+
     func binding(_ id: String) -> Binding<String> {
         Binding(get: { self.keys[id] ?? "" }, set: {
             let v = $0.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -203,12 +212,12 @@ final class SettingsModel: ObservableObject {
                 if code == 200 {
                     tests[id] = await probeModels(id, p, key)
                 } else if code == 401 || code == 403 || code == 400 {
-                    tests[id] = .fail("Chiave non valida (errore \(code)). Ricopiala dalla pagina del provider.")
+                    tests[id] = .fail("Non funziona: chiave non valida (errore \(code)). Ricopiala per intero dalla pagina del provider.")
                 } else {
-                    tests[id] = .fail("Il provider ha risposto con errore \(code). Riprova tra poco.")
+                    tests[id] = .fail("Non funziona: il provider ha risposto con l'errore \(code). Riprova tra poco.")
                 }
             } catch {
-                tests[id] = .fail("Connessione non riuscita: \(error.localizedDescription)")
+                tests[id] = .fail("Non funziona: connessione non riuscita (\(error.localizedDescription)).")
             }
         }
     }
@@ -239,16 +248,15 @@ final class SettingsModel: ObservableObject {
             else if codes.contains(where: { $0 == 429 || $0 >= 500 || $0 == 0 }) { busy.append(m.label) } // temporaneo
             else { gone.append(m.label) }                                                                 // 400/404: ritirato
         }
+        let ok = working.isEmpty ? "" : " Rispondono: \(working.joined(separator: ", "))."
         if !gone.isEmpty {
             // Nessuna azione richiesta all'utente: al riavvio il motore li sostituisce e salva la scelta.
-            let ok = working.isEmpty ? "" : "funzionante: \(working.joined(separator: ", ")). "
-            return .ok("Chiave valida · \(ok)Ritirati dal provider: \(gone.joined(separator: ", ")). L'app li sostituisce da sola con i migliori modelli disponibili: li trovi nella scheda Modelli.")
+            return .warn("La chiave funziona.\(ok) Ritirati dal provider: \(gone.joined(separator: ", ")); l'app li sostituisce da sola con i migliori disponibili (li trovi nel pannello Modelli).")
         }
         if !busy.isEmpty {
-            let ok = working.isEmpty ? "" : "attivo: \(working.joined(separator: ", ")) · "
-            return .ok("Chiave valida · \(ok)momentaneamente occupato: \(busy.joined(separator: ", ")) (durante il dibattito l'app riprova da sola)")
+            return .warn("La chiave funziona.\(ok) Occupati in questo momento: \(busy.joined(separator: ", ")); durante il dibattito l'app riprova da sola.")
         }
-        return .ok("Chiave valida · funzionante: \(working.joined(separator: ", "))")
+        return .ok(working.isEmpty ? "Funziona: la chiave è valida." : "Funziona: rispondono \(working.joined(separator: ", ")).")
     }
 
     func save() throws {
@@ -260,83 +268,114 @@ final class SettingsModel: ObservableObject {
     }
 }
 
-// MARK: - Interfaccia
+// MARK: - Interfaccia: pannello Chiavi API
+
+/// Esito di una verifica: simbolo colorato + testo leggibile (lo stato non dipende dal colore).
+struct TestResultView: View {
+    let state: TestState
+
+    var body: some View {
+        switch state {
+        case .idle:
+            EmptyView()
+        case .testing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Verifica in corso: provo i modelli…").foregroundStyle(.secondary)
+            }
+        case .ok(let m): line(m, "checkmark.circle.fill", .green)
+        case .warn(let m): line(m, "exclamationmark.triangle.fill", .orange)
+        case .fail(let m): line(m, "xmark.octagon.fill", .red)
+        }
+    }
+
+    private func line(_ text: String, _ symbol: String, _ color: Color) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(color)
+        }
+    }
+}
 
 struct ProviderSection: View {
     let guide: ProviderGuide
     @ObservedObject var model: SettingsModel
     @State private var showKey = false
-    @State private var expanded: Bool
+    @State private var guideOpen: Bool
 
     init(guide: ProviderGuide, model: SettingsModel) {
         self.guide = guide
         self.model = model
-        _expanded = State(initialValue: (model.keys[guide.id] ?? "").isEmpty)
+        // Guida aperta solo se manca la chiave di un provider gratuito principale.
+        _guideOpen = State(initialValue: !model.hasKey(guide.id) && !guide.optional)
     }
 
-    private var hasKey: Bool { !(model.keys[guide.id] ?? "").isEmpty }
+    private var test: TestState { model.tests[guide.id] ?? .idle }
+
+    /// Stato a parole nell'intestazione della sezione.
+    private var statusText: String {
+        switch test {
+        case .ok: return "Funziona"
+        case .warn: return "Funziona, con avvisi"
+        case .fail: return "Non funziona"
+        case .testing: return "Verifica in corso"
+        case .idle: return model.hasKey(guide.id) ? "Chiave inserita" : "Nessuna chiave"
+        }
+    }
 
     var body: some View {
         Section {
-            DisclosureGroup(isExpanded: $expanded) {
+            LabeledContent("Chiave API") {
+                HStack(spacing: 8) {
+                    Group {
+                        if showKey {
+                            TextField("Chiave API", text: model.binding(guide.id), prompt: Text("Incolla la chiave"))
+                        } else {
+                            SecureField("Chiave API", text: model.binding(guide.id), prompt: Text("Incolla la chiave"))
+                        }
+                    }
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body.monospaced())
+                    .frame(minWidth: 200)
+                    Button(showKey ? "Nascondi" : "Mostra") { showKey.toggle() }
+                        .help(showKey ? "Nascondi la chiave" : "Mostra la chiave per controllarla")
+                    Button("Verifica") { model.test(guide.id) }
+                        .help("Prova la chiave con una richiesta vera ai modelli del consiglio")
+                        .disabled(!model.hasKey(guide.id) || test == .testing)
+                }
+            }
+
+            if test != .idle { TestResultView(state: test) }
+
+            DisclosureGroup("Come ottenere la chiave", isExpanded: $guideOpen) {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(guide.steps.enumerated()), id: \.offset) { i, step in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text("\(i + 1).").monospacedDigit().foregroundStyle(.secondary)
                             Text(step).fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    Text("Dopo aver incollato la chiave premi “Verifica”, poi “Salva e attiva” in basso.")
-                        .font(.callout.weight(.medium))
-                        .padding(.top, 2)
                     Text(guide.note)
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 4)
-                    Button {
-                        NSWorkspace.shared.open(guide.url)
-                    } label: {
-                        Label("Apri la pagina per creare la chiave", systemImage: "arrow.up.right.square")
-                    }
-                    .padding(.top, 4)
-                }
-                .padding(.vertical, 6)
-            } label: {
-                HStack {
-                    Image(systemName: hasKey ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(hasKey ? Color.green : Color.secondary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(guide.name).font(.headline)
-                        Text(guide.models).font(.caption).foregroundStyle(.secondary)
+                    Link(destination: guide.url) {
+                        Label("Apri la pagina delle chiavi di \(guide.name)", systemImage: "arrow.up.right.square")
                     }
                 }
+                .padding(.vertical, 4)
             }
-
-            HStack {
-                Group {
-                    if showKey {
-                        TextField("Incolla qui la chiave", text: model.binding(guide.id))
-                    } else {
-                        SecureField("Incolla qui la chiave", text: model.binding(guide.id))
-                    }
-                }
-                .textFieldStyle(.roundedBorder)
-                .labelsHidden()
-                .font(.system(.body, design: .monospaced))
-                Button { showKey.toggle() } label: { Image(systemName: showKey ? "eye.slash" : "eye") }
-                    .buttonStyle(.borderless)
-                    .help(showKey ? "Nascondi" : "Mostra")
-                Button("Verifica") { model.test(guide.id) }
-                    .disabled(!hasKey || model.tests[guide.id] == .testing)
+        } header: {
+            HStack(alignment: .firstTextBaseline) {
+                Text(guide.free ? "\(guide.name) · Gratis" : "\(guide.name) · A pagamento")
+                Spacer()
+                Text(statusText).font(.callout).fontWeight(.regular).foregroundStyle(.secondary)
             }
-
-            switch model.tests[guide.id] ?? .idle {
-            case .idle: EmptyView()
-            case .testing: HStack { ProgressView().controlSize(.small); Text("Verifica in corso (provo i modelli)…").foregroundStyle(.secondary) }
-            case .ok(let m): Label(m, systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-            case .warn(let m): Label(m, systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange)
-            case .fail(let m): Label(m, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
-            }
+        } footer: {
+            Text("\(guide.unlocks). \(guide.summary)")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -345,25 +384,47 @@ struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     var close: () -> Void
     @State private var error: String?
+    @AppStorage("SettingsShowOtherProviders") private var showOthers = false
+
+    private var available: [ProviderGuide] { providerGuides.filter { model.providers[$0.id] != nil } }
+    private var main: [ProviderGuide] { available.filter { !$0.optional } }
+    private var others: [ProviderGuide] { available.filter(\.optional) }
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Chiavi API").font(.title2.bold())
-                        Text("Claude usa il tuo abbonamento Pro tramite Claude Code e non richiede chiavi. Per far partecipare gli altri modelli servono chiavi gratuite: segui la guida di ciascun provider. Ne bastano due per avere un dibattito; più ne aggiungi, più voci avrà il consiglio.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Puoi usare AI Council gratis").font(.headline)
+                            Text("Claude non chiede chiavi se hai installato Claude Code con un abbonamento Claude (facoltativo). Gemini, Groq e OpenRouter danno chiavi gratuite, senza carta di credito: con queste il consiglio ha già più voci. Incolla una chiave, premi “Verifica”, poi “Salva e attiva”.")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } icon: {
+                        Image(systemName: "gift").foregroundStyle(.green)
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 2)
                 }
-                ForEach(providerGuides.filter { model.providers[$0.id] != nil }) { g in
-                    ProviderSection(guide: g, model: model)
+
+                ForEach(main) { g in ProviderSection(guide: g, model: model) }
+
+                if !others.isEmpty {
+                    Section {
+                        Toggle("Mostra altri provider (\(others.map(\.name).joined(separator: ", ")))", isOn: $showOthers)
+                    } footer: {
+                        Text("Facoltativi: servono solo se vuoi altre voci. OpenAI è l'unico a pagamento.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if showOthers || others.contains(where: { model.hasKey($0.id) }) {
+                        ForEach(others) { g in ProviderSection(guide: g, model: model) }
+                    }
                 }
+
                 Section {
                     Text("Le chiavi restano solo su questo Mac, nel file “.env” della cartella dati dell'app, leggibile solo dal tuo utente.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .formStyle(.grouped)
@@ -372,10 +433,12 @@ struct SettingsView: View {
             HStack {
                 Text("\(model.configuredCount) di \(model.providers.count) provider configurati")
                     .foregroundStyle(.secondary)
-                if let error { Text(error).foregroundStyle(.red).lineLimit(1) }
+                if let error {
+                    Text(error).foregroundStyle(.red).lineLimit(1).textSelection(.enabled)
+                }
                 Spacer()
+                // Senza Esc: nei campi Esc deve solo annullare la modifica, non chiudere e perdere tutto.
                 Button("Annulla") { model.reload(); close() }
-                    .keyboardShortcut(.cancelAction)
                 Button("Salva e attiva") {
                     do { try model.save(); close() } catch { self.error = error.localizedDescription }
                 }
@@ -384,66 +447,73 @@ struct SettingsView: View {
             }
             .padding(14)
         }
-        .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 720)
+        .frame(width: settingsPanelSize.width, height: settingsPanelSize.height)
     }
 }
 
 // MARK: - Finestra
 
-enum SettingsTab: Hashable { case keys, models }
+/// Dimensione fissa dei pannelli: la finestra non si ridimensiona, il contenuto scorre nel Form.
+let settingsPanelSize = CGSize(width: 680, height: 600)
 
-@MainActor
-final class SettingsNav: ObservableObject {
-    @Published var tab: SettingsTab = .keys
-}
+enum SettingsTab: Int { case keys = 0, models = 1 }
 
-struct SettingsRoot: View {
-    @ObservedObject var nav: SettingsNav
-    @ObservedObject var keys: SettingsModel
-    @ObservedObject var models: ModelsModel
-    var close: () -> Void
+/// Toolbar di pannelli di sistema; ricorda l'ultimo pannello aperto.
+final class SettingsTabsController: NSTabViewController {
+    static let lastTabKey = "SettingsLastTab"
 
-    var body: some View {
-        TabView(selection: $nav.tab) {
-            SettingsView(model: keys, close: close)
-                .tabItem { Label("Chiavi API", systemImage: "key") }
-                .tag(SettingsTab.keys)
-            ModelsTab(model: models, close: close)
-                .tabItem { Label("Modelli", systemImage: "person.3") }
-                .tag(SettingsTab.models)
-        }
-        .padding(.top, 6)
-        .frame(minWidth: 640, minHeight: 560)
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+        UserDefaults.standard.set(selectedTabViewItemIndex, forKey: Self.lastTabKey)
     }
 }
 
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
+    private var tabs: SettingsTabsController?
     let model = SettingsModel()
     let models: ModelsModel
-    private let nav = SettingsNav()
 
     init(port: @escaping () -> Int) {
         models = ModelsModel(port: port)
     }
 
-    func show(tab: SettingsTab? = nil) {
-        if window == nil {
-            let w = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 780),
-                styleMask: [.titled, .closable, .resizable],
-                backing: .buffered, defer: false)
-            w.title = "Impostazioni"
-            w.isReleasedWhenClosed = false
-            w.contentViewController = NSHostingController(
-                rootView: SettingsRoot(nav: nav, keys: model, models: models) { [weak w] in w?.close() })
-            w.setContentSize(NSSize(width: 720, height: 780))
-            w.center()
-            w.setFrameAutosaveName("SettingsWindow")
-            window = w
+    private func makeWindow() -> NSWindow {
+        let close: () -> Void = { [weak self] in self?.window?.close() }
+        let tabs = SettingsTabsController()
+        tabs.tabStyle = .toolbar
+        tabs.transitionOptions = [.crossfade]
+
+        func item(_ vc: NSViewController, _ title: String, _ symbol: String) -> NSTabViewItem {
+            vc.title = title   // il titolo della finestra segue il pannello scelto
+            let it = NSTabViewItem(viewController: vc)
+            it.label = title
+            it.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            return it
         }
-        if let tab { nav.tab = tab }
+        let keysVC = NSHostingController(rootView: SettingsView(model: model, close: close))
+        let modelsVC = NSHostingController(rootView: ModelsTab(model: models, close: close))
+        for vc in [keysVC, modelsVC] as [NSViewController] { vc.preferredContentSize = settingsPanelSize }
+        tabs.addTabViewItem(item(keysVC, "Chiavi API", "key"))
+        tabs.addTabViewItem(item(modelsVC, "Modelli", "person.3"))
+        let last = UserDefaults.standard.integer(forKey: SettingsTabsController.lastTabKey)
+        tabs.selectedTabViewItemIndex = (0..<tabs.tabViewItems.count).contains(last) ? last : 0
+
+        let w = NSWindow(contentViewController: tabs)
+        // Niente Riduci né Zoom, finestra non ridimensionabile (HIG Impostazioni).
+        w.styleMask = [.titled, .closable]
+        w.toolbarStyle = .preference
+        w.isReleasedWhenClosed = false
+        w.center()
+        w.setFrameAutosaveName("SettingsPanels")
+        self.tabs = tabs
+        return w
+    }
+
+    func show(tab: SettingsTab? = nil) {
+        if window == nil { window = makeWindow() }
+        if let tab { tabs?.selectedTabViewItemIndex = tab.rawValue }
         model.reload()
         Task { await models.load() }
         window?.makeKeyAndOrderFront(nil)
