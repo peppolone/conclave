@@ -483,7 +483,8 @@ final class SettingsWindowController {
         let close: () -> Void = { [weak self] in self?.window?.close() }
         let tabs = SettingsTabsController()
         tabs.tabStyle = .toolbar
-        tabs.transitionOptions = [.crossfade]
+        // Senza dissolvenza: con la transizione animata il pannello nuovo restava coperto da una fascia vuota.
+        tabs.transitionOptions = []
 
         func item(_ vc: NSViewController, _ title: String, _ symbol: String) -> NSTabViewItem {
             vc.title = title   // il titolo della finestra segue il pannello scelto
@@ -511,12 +512,21 @@ final class SettingsWindowController {
         return w
     }
 
+    /// Il motore è (ri)partito: se le Impostazioni sono aperte si ricaricano i modelli,
+    /// così "Motore non pronto" non resta a schermo dopo l'avvio.
+    func engineStarted() {
+        guard window?.isVisible == true else { return }
+        Task { await models.load() }
+    }
+
     func show(tab: SettingsTab? = nil) {
         if window == nil { window = makeWindow() }
         if let tab { tabs?.selectedTabViewItemIndex = tab.rawValue }
         model.reload()
         Task { await models.load() }
         window?.makeKeyAndOrderFront(nil)
+        // Nessun campo attivo all'apertura: altrimenti il pannello scorre fino alla ricerca.
+        window?.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

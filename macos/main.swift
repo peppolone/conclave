@@ -11,6 +11,12 @@ import UserNotifications
 
 enum Paths {
     static let dataDir: URL = {
+        // COUNCIL_DATA (solo sviluppo e prove): cartella dati alternativa, mai quella reale.
+        if let custom = ProcessInfo.processInfo.environment["COUNCIL_DATA"], !custom.isEmpty {
+            let dir = URL(fileURLWithPath: custom, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("AI Council", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -173,6 +179,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     private var unreadVerdicts = 0
     /// nil = autorizzazione alle notifiche non ancora chiesta in questa sessione.
     private var notificationsAllowed: Bool?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Una sola finestra principale: niente voci "Mostra la barra dei pannelli" nel menu Vista.
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         seedSettings()
@@ -705,6 +716,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         content.isHidden = false
         store.engineStarted()
         sidebar.reload()
+        settings.engineStarted()
         // La tastiera non deve finire nel campo di ricerca della barra laterale.
         window.makeFirstResponder(nil)
         if let id = store.current?.id { Task { await store.open(id) } }
