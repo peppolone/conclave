@@ -66,7 +66,6 @@
 "Apri la piattaforma OpenAI e aggiungi credito in “Billing”." = "Open the OpenAI platform and add credit in “Billing”.";
 "Apri su GitHub" = "Open on GitHub";
 "Archivio" = "File";
-"Arrotondato (SF Rounded)" = "Rounded (SF Rounded)";
 "Aspetto" = "Appearance";
 "Automatico (consigliato)" = "Automatic (recommended)";
 "Avvia" = "Start";
@@ -79,8 +78,6 @@
 "Buon pomeriggio" = "Good afternoon";
 "Buonasera" = "Good evening";
 "Buongiorno" = "Good morning";
-"Carattere" = "Font";
-"Carattere del testo dell'interfaccia e delle risposte." = "Font for the interface and the answers.";
 "Carico i modelli di %@…" = "Loading %@ models…";
 "Cartella dati" = "Data folder";
 "Catalogo non disponibile: %@" = "Catalog unavailable: %@";
@@ -334,10 +331,8 @@
 "Scuro: sempre scuro, anche se macOS è chiaro." = "Dark: always dark, even if macOS is light.";
 "Se qualcosa non va" = "If Something Goes Wrong";
 "Seleziona tutto" = "Select All";
-"Serif (New York)" = "Serif (New York)";
 "Servizi" = "Services";
 "Sistema" = "System";
-"Sistema (San Francisco)" = "System (San Francisco)";
 "Sistema: segue l'aspetto scelto in macOS." = "System: follows the appearance set in macOS.";
 "Solo a pagamento: l'abbonamento ChatGPT non include le API." = "Paid only: a ChatGPT subscription doesn’t include the API.";
 "Solo risposte" = "Answers only";
@@ -400,3 +395,6 @@
 "un modello di riserva" = "a fallback model";
 "versione progetto github cartella dati" = "version project github data folder versione progetto cartella dati";
 "voci consiglio catalogo claude famiglia prova riserva automatico" = "voices council catalog claude family test fallback automatic voci consiglio catalogo famiglia prova riserva automatico";
+"Mostra meno" = "Show less";
+"Mostra tutta la domanda" = "Show full question";
+"Cerca nelle discussioni (⌘F)" = "Search discussions (⌘F)";

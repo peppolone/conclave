@@ -284,9 +284,9 @@ struct TestResultView: View {
                 ProgressView().controlSize(.small)
                 Text("Verifica in corso: provo i modelli…").foregroundStyle(.secondary)
             }
-        case .ok(let m): line(m, "checkmark.circle.fill", .green)
-        case .warn(let m): line(m, "exclamationmark.triangle.fill", .orange)
-        case .fail(let m): line(m, "xmark.octagon.fill", .red)
+        case .ok(let m): line(m, "checkmark.circle.fill", Brand.success)
+        case .warn(let m): line(m, "exclamationmark.triangle.fill", Brand.warning)
+        case .fail(let m): line(m, "xmark.octagon.fill", Brand.danger)
         }
     }
 
@@ -439,7 +439,6 @@ struct SettingsBar<Content: View>: View {
 struct GeneralPage: View {
     @State private var appearance = AppAppearance.current
     @State private var language = AppLanguage.current
-    @AppStorage(AppFont.key) private var font = AppFont.system.rawValue
     @State private var openAtLogin = LoginItem.enabled || LoginItem.needsApproval
     @State private var loginError: String?
     @State private var menuBar = MenuBarPreference.enabled
@@ -474,15 +473,6 @@ struct GeneralPage: View {
                     .labelsHidden()
                     .frame(width: 132)
                     .help(L("Tema") + ": " + appearance.title)
-                }
-                SettingsRow(L("Carattere"), detail: L("Carattere del testo dell'interfaccia e delle risposte.")) {
-                    Picker(L("Carattere"), selection: $font) {
-                        ForEach(AppFont.allCases) { f in
-                            Text(f.title).fontDesign(f.design).tag(f.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
                 }
             }
             SettingsSection(L("Lingua")) {
@@ -628,7 +618,7 @@ struct SettingsView: View {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: "gift")
                         .font(.title2)
-                        .foregroundStyle(Brand.green)
+                        .foregroundStyle(Brand.success)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Puoi usare AI Council gratis").font(.headline)
@@ -648,10 +638,9 @@ struct SettingsView: View {
                 if !others.isEmpty {
                     SettingsSection(L("Altri provider"), footer: L("Facoltativi: servono solo se vuoi altre voci. OpenAI è l'unico a pagamento.")) {
                         SettingsRow(L("Mostra altri provider"), detail: others.map(\.name).joined(separator: ", ")) {
-                            Toggle("Mostra altri provider", isOn: $showOthers)
-                                .labelsHidden()
+                            Toggle(L("Mostra altri provider"), isOn: $showOthers)
                                 .toggleStyle(.switch)
-                                .controlSize(.small)
+                                .labelsHidden()
                         }
                     }
                     if showOthers || others.contains(where: { model.hasKey($0.id) }) {
@@ -668,7 +657,7 @@ struct SettingsView: View {
                 Text(String(format: L("%d di %d provider configurati"), model.configuredCount, model.providers.count))
                     .foregroundStyle(.secondary)
                 if let error {
-                    Text(error).foregroundStyle(.red).lineLimit(1).textSelection(.enabled)
+                    Text(error).foregroundStyle(Brand.danger).lineLimit(1).textSelection(.enabled)
                 }
                 Spacer()
                 // Senza Esc: nei campi Esc deve solo annullare la modifica, non chiudere e perdere tutto.
@@ -866,11 +855,13 @@ final class SettingsWindowController {
     private func makeWindow() -> NSWindow {
         let close: () -> Void = { [weak self] in self?.window?.close() }
 
-        let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav).appFont().rebuildOnAppearanceChange())
-        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close).appFont().rebuildOnAppearanceChange())
-        // La finestra ha dimensione fissa: il contenuto SwiftUI non deve ridimensionarla.
-        sidebarVC.sizingOptions = []
-        detailVC.sizingOptions = []
+        let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav).rebuildOnAppearanceChange())
+        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close).rebuildOnAppearanceChange())
+        // Solo il vincolo di dimensione massima: con [] la vista SwiftUI resta fuori da Auto Layout
+        // e alla prima apertura gli interruttori comparivano senza pomello; con il predefinito
+        // .standardBounds (anche minimo e dimensione ideale) la pagina Modelli allargava la finestra.
+        sidebarVC.sizingOptions = [.maxSize]
+        detailVC.sizingOptions = [.maxSize]
 
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
         sidebarItem.minimumThickness = settingsSidebarWidth

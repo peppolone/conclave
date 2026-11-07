@@ -11,12 +11,38 @@ enum Brand {
     static let green = Color(red: 0x47 / 255, green: 0xcd / 255, blue: 0x89 / 255)
     static let amber = Color(red: 0xf5 / 255, green: 0xb5 / 255, blue: 0x44 / 255)
 
-    /// Colore d'accento dell'app (pulsanti principali, selezioni del marchio).
+    /// Colore d'accento dell'app (pulsanti principali, selezioni del marchio): azzurro
+    /// polvere, tenue ma leggibile su chiaro e su scuro.
     static let accent = Color(nsColor: NSColor(name: "BrandAccent") { a in
         a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x8a / 255, green: 0xa4 / 255, blue: 1, alpha: 1)
-            : NSColor(srgbRed: 0x4a / 255, green: 0x6c / 255, blue: 0xf0 / 255, alpha: 1)
+            ? NSColor(srgbRed: 0x9d / 255, green: 0xbb / 255, blue: 0xec / 255, alpha: 1)
+            : NSColor(srgbRed: 0x52 / 255, green: 0x7e / 255, blue: 0xcc / 255, alpha: 1)
     })
+
+    // Colori di stato, pastello e in tinta col logo (mai i verdi/rossi accesi di sistema).
+    /// Riuscito, funziona, gratuito.
+    static let success = Color(nsColor: NSColor(name: "BrandSuccess") { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0x8c / 255, green: 0xd4 / 255, blue: 0xae / 255, alpha: 1)
+            : NSColor(srgbRed: 0x3f / 255, green: 0x9a / 255, blue: 0x70 / 255, alpha: 1)
+    })
+    /// Avviso, attesa, a pagamento.
+    static let warning = Color(nsColor: NSColor(name: "BrandWarning") { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0xf0 / 255, green: 0xc9 / 255, blue: 0x80 / 255, alpha: 1)
+            : NSColor(srgbRed: 0xc0 / 255, green: 0x86 / 255, blue: 0x2c / 255, alpha: 1)
+    })
+    /// Errore, non riuscito.
+    static let danger = Color(nsColor: NSColor(name: "BrandDanger") { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0xf0 / 255, green: 0xa0 / 255, blue: 0x9c / 255, alpha: 1)
+            : NSColor(srgbRed: 0xc4 / 255, green: 0x5c / 255, blue: 0x58 / 255, alpha: 1)
+    })
+
+    /// Tinte morbide dei tre membri del logo, per aloni e filo del verdetto.
+    static let softBlue = Color(red: 0xa9 / 255, green: 0xc0 / 255, blue: 0xf2 / 255)
+    static let softGreen = Color(red: 0xa6 / 255, green: 0xdd / 255, blue: 0xc0 / 255)
+    static let softAmber = Color(red: 0xf4 / 255, green: 0xd3 / 255, blue: 0x9b / 255)
 
     /// Fondo del contenuto: carta leggermente fredda in chiaro, blu notte in scuro.
     static let canvas = Color(nsColor: NSColor(name: "BrandCanvas") { a in
@@ -35,8 +61,8 @@ enum Brand {
     /// Fondo della riga selezionata (barra laterale, elenchi): accento del marchio, tenue.
     static let selection = Color(nsColor: NSColor(name: "BrandSelection") { a in
         a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x8a / 255, green: 0xa4 / 255, blue: 1, alpha: 0.22)
-            : NSColor(srgbRed: 0x4a / 255, green: 0x6c / 255, blue: 0xf0 / 255, alpha: 0.13)
+            ? NSColor(srgbRed: 0x9d / 255, green: 0xbb / 255, blue: 0xec / 255, alpha: 0.22)
+            : NSColor(srgbRed: 0x52 / 255, green: 0x7e / 255, blue: 0xcc / 255, alpha: 0.13)
     })
 
     /// Fondo tenue del verdetto: superficie appena tinta dell'accento.
@@ -46,10 +72,7 @@ enum Brand {
             : NSColor(srgbRed: 0xfb / 255, green: 0xfc / 255, blue: 1, alpha: 1)
     })
 
-    // Spaziature e raggi comuni (pt).
-    enum Space {
-        static let xs: CGFloat = 4, s: CGFloat = 8, m: CGFloat = 12, l: CGFloat = 16, xl: CGFloat = 24, xxl: CGFloat = 32
-    }
+    // Raggi comuni (pt).
     enum Radius {
         static let control: CGFloat = 8, card: CGFloat = 12, panel: CGFloat = 16, composer: CGFloat = 20
     }
@@ -96,9 +119,9 @@ struct BrandBackground: View {
             let r = max(g.size.width, g.size.height)
             ZStack {
                 Brand.canvas
-                RadialGradient(colors: [Brand.blue.opacity(o), .clear], center: UnitPoint(x: 0.85, y: 0), startRadius: 0, endRadius: r * 0.6)
-                RadialGradient(colors: [Brand.green.opacity(o * 0.8), .clear], center: UnitPoint(x: 0, y: 1), startRadius: 0, endRadius: r * 0.5)
-                RadialGradient(colors: [Brand.amber.opacity(o * 0.7), .clear], center: UnitPoint(x: 1, y: 1), startRadius: 0, endRadius: r * 0.4)
+                RadialGradient(colors: [Brand.softBlue.opacity(o), .clear], center: UnitPoint(x: 0.85, y: 0), startRadius: 0, endRadius: r * 0.6)
+                RadialGradient(colors: [Brand.softGreen.opacity(o * 0.8), .clear], center: UnitPoint(x: 0, y: 1), startRadius: 0, endRadius: r * 0.5)
+                RadialGradient(colors: [Brand.softAmber.opacity(o * 0.7), .clear], center: UnitPoint(x: 1, y: 1), startRadius: 0, endRadius: r * 0.4)
             }
         }
         .ignoresSafeArea()

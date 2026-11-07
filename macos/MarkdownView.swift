@@ -505,9 +505,9 @@ private struct MarkdownBlockView: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return .title3.weight(.semibold)
-        case 2: return .headline
-        case 3: return .subheadline.weight(.semibold)
+        case 1: return .title2.weight(.semibold)
+        case 2: return .title3.weight(.semibold)
+        case 3: return .headline
         default: return baseFont.weight(.semibold)
         }
     }

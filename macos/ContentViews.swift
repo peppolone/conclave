@@ -154,7 +154,7 @@ struct ComposerView: View {
         VStack(spacing: 12) {
             CouncilLogo(size: 48)
             Text(greeting)
-                .font(.system(size: 34, weight: .regular, design: .serif))
+                .font(.system(size: 34, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Text("Fai una domanda: più AI ne discutono e un giudice decide.")
                 .font(.title3)
@@ -318,7 +318,7 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: 6) {
             if let err = store.startError {
                 Label(err, systemImage: "exclamationmark.circle")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Brand.danger)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !store.canEstimate {
@@ -459,6 +459,8 @@ struct DebateView: View {
 
     @State private var expanded: [String: Bool] = [:]
     @State private var copied = false
+    /// Domanda lunga mostrata per intero nell'intestazione.
+    @State private var questionExpanded = false
     /// Dibattito seguito dal vivo: i round restano aperti anche quando arriva il verdetto,
     /// così la posizione di lettura non cambia.
     @State private var watchedLive: Bool
@@ -591,26 +593,25 @@ struct DebateView: View {
     // MARK: Intestazione: stato, domanda, dettagli, partecipanti
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
             statusBadge
 
-            Text(debate.question)
-                .font(.system(.title2, design: .serif).weight(.semibold))
-                .lineSpacing(2)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(debate.displayTitle)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .accessibilityAddTraits(.isHeader)
+                questionText
+            }
 
             Group {
                 if debate.isRunning {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in Text(headerMeta) }
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in metaRow }
                 } else {
-                    Text(headerMeta)
+                    metaRow
                 }
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
 
             if !participants.isEmpty {
                 FlowLayout(spacing: 6, lineSpacing: 6) {
@@ -620,7 +621,6 @@ struct DebateView: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(L("Partecipanti") + ": " + participants.map(\.label).joined(separator: ", "))
-                .padding(.top, 2)
             }
 
             if !debate.isRunning, !["done", "cancelled"].contains(debate.status),
@@ -632,6 +632,45 @@ struct DebateView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// Domande lunghe: tre righe e "Mostra tutto"; il testo intero resta nel tooltip.
+    private var questionIsLong: Bool {
+        debate.question.count > 240 || debate.question.filter(\.isNewline).count > 2
+    }
+
+    private var questionText: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(debate.question)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineSpacing(2)
+                .lineLimit(questionExpanded || !questionIsLong ? nil : 3)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .help(questionIsLong && !questionExpanded ? debate.question : "")
+                .accessibilityLabel(L("Domanda") + ": " + debate.question)
+            if questionIsLong {
+                Button(questionExpanded ? L("Mostra meno") : L("Mostra tutta la domanda")) {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { questionExpanded.toggle() }
+                }
+                .buttonStyle(.link)
+                .font(.callout)
+            }
+        }
+    }
+
+    /// Data, round, giudice e durata: voci separate con il proprio simbolo, su più righe se serve.
+    private var metaRow: some View {
+        FlowLayout(spacing: 18, lineSpacing: 8) {
+            ForEach(headerMeta, id: \.symbol) { m in
+                Label(m.text, systemImage: m.symbol)
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .accessibilityElement(children: .combine)
     }
 
     private var participants: [(letter: String, label: String)] {
@@ -646,11 +685,11 @@ struct DebateView: View {
         return f
     }()
 
-    /// "7 nov 2026, 10:24 · 3 round · giudice Claude Sonnet · durata 1 min 34 s".
-    private var headerMeta: String {
-        let rest = store.meta(debate)
+    /// Data, poi round, giudice e durata (es. "7 nov 2026, 10:24", "3 round", "giudice Claude Sonnet", "durata 1 min 34 s").
+    private var headerMeta: [(symbol: String, text: String)] {
+        let rest = store.metaItems(debate)
         guard let s = debate.startedAt else { return rest }
-        return rest.isEmpty ? Self.headerDate.string(from: s) : Self.headerDate.string(from: s) + " · " + rest
+        return [(symbol: "calendar", text: Self.headerDate.string(from: s))] + rest
     }
 
     /// Esito del dibattito in una capsula: simbolo e testo, mai solo colore.
@@ -660,10 +699,10 @@ struct DebateView: View {
                         symbol: "circle.dotted", tint: Brand.accent, pulse: !reduceMotion)
         } else {
             switch debate.status {
-            case "done": StatusBadge(text: L("Completato"), symbol: "checkmark.circle.fill", tint: .green)
+            case "done": StatusBadge(text: L("Completato"), symbol: "checkmark.circle.fill", tint: Brand.success)
             case "cancelled": StatusBadge(text: L("Interrotto"), symbol: "stop.circle.fill", tint: .secondary)
-            case "interrupted": StatusBadge(text: L("Interrotto: il motore è stato riavviato"), symbol: "exclamationmark.triangle.fill", tint: .orange)
-            default: StatusBadge(text: L("Non riuscito"), symbol: "xmark.octagon.fill", tint: .red)
+            case "interrupted": StatusBadge(text: L("Interrotto: il motore è stato riavviato"), symbol: "exclamationmark.triangle.fill", tint: Brand.warning)
+            default: StatusBadge(text: L("Non riuscito"), symbol: "xmark.octagon.fill", tint: Brand.danger)
             }
         }
     }
@@ -710,13 +749,13 @@ struct DebateView: View {
                 }
             } icon: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(copied ? AnyShapeStyle(Brand.green) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(copied ? AnyShapeStyle(Brand.success) : AnyShapeStyle(.secondary))
                     .contentTransition(.symbolEffect(.replace))
             }
             IconButton(L("Esporta come Markdown…"), symbol: "arrow.down.doc") {
                 if let e = store.exportMarkdown() { saveFile(e.filename, e.text) }
             }
-            ShareLink(item: verdict, subject: Text(debate.question)) {
+            ShareLink(item: verdict, subject: Text(debate.displayTitle)) {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 14, weight: .medium))
                     .frame(width: 30, height: 30)
@@ -745,7 +784,7 @@ struct DebateView: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(L("Verdetto del consiglio"))
-                        .font(.system(.title3, design: .serif).weight(.semibold))
+                        .font(.title3.weight(.semibold))
                     if let by = debate.verdictBy, !by.isEmpty {
                         Text(String(format: L("Giudice: %@"), by))
                             .font(.subheadline)
@@ -774,7 +813,7 @@ struct DebateView: View {
         .overlay(alignment: .top) {
             // Filo d'accento in cima: distingue il verdetto dalle card dello svolgimento.
             UnevenRoundedRectangle(topLeadingRadius: Brand.Radius.panel, topTrailingRadius: Brand.Radius.panel, style: .continuous)
-                .fill(LinearGradient(colors: [Brand.blue, Brand.green, Brand.amber], startPoint: .leading, endPoint: .trailing))
+                .fill(LinearGradient(colors: [Brand.softBlue, Brand.softGreen, Brand.softAmber], startPoint: .leading, endPoint: .trailing))
                 .frame(height: 3)
                 .mask(RoundedRectangle(cornerRadius: Brand.Radius.panel, style: .continuous).padding(.bottom, -Brand.Radius.panel))
                 .accessibilityHidden(true)
@@ -930,8 +969,8 @@ private struct StepMarker: View {
                 Text("\(number)").foregroundStyle(Brand.accent)
             case .stopped:
                 Circle().fill(Brand.surface)
-                Circle().strokeBorder(Color.orange, lineWidth: 1.5)
-                Text("\(number)").foregroundStyle(.orange)
+                Circle().strokeBorder(Brand.warning, lineWidth: 1.5)
+                Text("\(number)").foregroundStyle(Brand.warning)
             default:
                 Circle().fill(Brand.surface)
                 Circle().strokeBorder(Brand.hairline, lineWidth: 1.5)
@@ -960,9 +999,8 @@ private struct PhaseHeader: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(eyebrow.uppercased(with: AppLanguage.locale))
-                    .font(.caption.weight(.semibold))
-                    .tracking(0.6)
+                Text(eyebrow)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text(name)
                     .font(.title3.weight(.semibold))
@@ -1044,7 +1082,7 @@ private struct PhaseStatusLabel: View {
             Text(Self.text(state))
         } icon: {
             Image(systemName: Self.symbol(state))
-                .foregroundStyle(state == .done ? AnyShapeStyle(Color.green)
+                .foregroundStyle(state == .done ? AnyShapeStyle(Brand.success)
                                  : state == .current ? AnyShapeStyle(Brand.accent) : AnyShapeStyle(.secondary))
                 .symbolEffect(.pulse, isActive: state == .current && !reduceMotion)
         }
@@ -1265,7 +1303,7 @@ private struct CardView: View {
                         }
                         .fixedSize(horizontal: false, vertical: true)
                     } icon: {
-                        Image(systemName: "xmark.octagon").foregroundStyle(.red)
+                        Image(systemName: "xmark.octagon").foregroundStyle(Brand.danger)
                     }
                     .font(.body)
                     .textSelection(.enabled)

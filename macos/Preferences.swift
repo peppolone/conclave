@@ -1,4 +1,4 @@
-// Preferenze della pagina Generale: lingua dell'interfaccia, carattere, apertura all'accesso
+// Preferenze della pagina Generale: lingua dell'interfaccia, apertura all'accesso
 // e icona nella barra dei menu. Valori in UserDefaults; le viste li leggono con @AppStorage.
 
 import AppKit
@@ -44,9 +44,6 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     /// Scelta valida in questa esecuzione (letta una volta all'avvio).
     static let launched = current
 
-    /// true se la scelta salvata non è ancora in uso: serve un riavvio.
-    static var needsRestart: Bool { current != launched }
-
     /// Riavvia l'app (apre una nuova istanza e chiude questa).
     static func relaunch() {
         let cfg = NSWorkspace.OpenConfiguration()
@@ -57,33 +54,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     }
 }
 
-/// Carattere dell'interfaccia: San Francisco, la variante arrotondata o New York (serif).
-enum AppFont: String, CaseIterable, Identifiable {
-    case system, rounded, serif
-    var id: String { rawValue }
-    static let key = "AppFont"
-
-    var title: String {
-        switch self {
-        case .system: L("Sistema (San Francisco)")
-        case .rounded: L("Arrotondato (SF Rounded)")
-        case .serif: L("Serif (New York)")
-        }
-    }
-
-    var design: Font.Design {
-        switch self {
-        case .system: .default
-        case .rounded: .rounded
-        case .serif: .serif
-        }
-    }
-}
-
 extension View {
-    /// Applica il carattere scelto nelle Impostazioni (aggiornamento immediato).
-    func appFont() -> some View { modifier(AppFontModifier()) }
-
     /// Ricrea la vista quando cambia il tema: i menu a comparsa (NSPopUpButton) altrimenti
     /// restano disegnati con i colori del tema precedente e il testo diventa invisibile.
     func rebuildOnAppearanceChange() -> some View { modifier(AppearanceRebuild()) }
@@ -93,16 +64,6 @@ private struct AppearanceRebuild: ViewModifier {
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
 
     func body(content: Content) -> some View { content.id(appearance) }
-}
-
-private struct AppFontModifier: ViewModifier {
-    @AppStorage(AppFont.key) private var font = AppFont.system.rawValue
-
-    // Con "Sistema" non si imposta nulla: i titoli in serif scelti dalle viste restano tali.
-    func body(content: Content) -> some View {
-        let f = AppFont(rawValue: font) ?? .system
-        content.fontDesign(f == .system ? nil : f.design)
-    }
 }
 
 /// Apertura automatica all'accesso (Elementi di login di macOS).

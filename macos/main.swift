@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             openSettings: { [weak self] in self?.openSettings(nil) },
             openModels: { [weak self] in self?.seedSettings(); self?.settings.show(tab: .models) },
             saveFile: { [weak self] name, text in self?.saveMarkdown(filename: name, text: text) })
-        content = NSHostingView(rootView: root.appFont())
+        content = NSHostingView(rootView: root)
         content.isHidden = true
         store.onHistoryChanged = { [weak self] in self?.sidebar.reload() }
         store.onCurrentChanged = { [weak self] id in self?.sidebar.selected = id }
@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         sidebar.onExport = { [weak self] id in self?.exportDiscussion(id) }
         sidebar.onNew = { [weak self] in self?.newDebate(nil) }
         sidebar.onSettings = { [weak self] in self?.openSettings(nil) }
-        sidebarItem = NSSplitViewItem(sidebarWithViewController: NSHostingController(rootView: SidebarView(model: sidebar).appFont()))
+        sidebarItem = NSSplitViewItem(sidebarWithViewController: NSHostingController(rootView: SidebarView(model: sidebar)))
         sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 380
         sidebarItem.canCollapse = true
@@ -408,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             header.isEnabled = false
             menu.addItem(header)
             for d in recent {
-                let i = item(Self.short(d.question, 48), #selector(openRecent(_:)), "")
+                let i = item(Self.short(d.displayTitle, 48), #selector(openRecent(_:)), "")
                 i.tag = d.id
                 i.toolTip = d.question
                 menu.addItem(i)
@@ -450,7 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             updateToolbarItems(hasDebate: false)
             return
         }
-        window.title = Self.short(d.question, 60)
+        window.title = d.displayTitle
         var parts: [String] = []
         if d.isRunning {
             let phase = d.phases.last?.title
@@ -611,6 +611,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         sidebar.focusSearch()
     }
 
+    @objc func toggleSearch(_ sender: Any?) {
+        revealSidebar()
+        sidebar.toggleSearch()
+    }
+
     @objc func deleteDiscussion(_ sender: Any?) {
         revealSidebar()
         sidebar.requestDelete()
@@ -682,6 +687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     // MARK: Toolbar
 
+    private static let searchItem = NSToolbarItem.Identifier("searchDebates")
     private static let newItem = NSToolbarItem.Identifier("newDebate")
     private static let settingsItem = NSToolbarItem.Identifier("settings")
     private static let copyItem = NSToolbarItem.Identifier("copyVerdict")
@@ -689,11 +695,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     // Due gruppi a destra: azioni della discussione, spazio fisso, "Nuova discussione".
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.copyItem, Self.exportItem, .space, Self.newItem]
+        [.toggleSidebar, Self.searchItem, .sidebarTrackingSeparator, .flexibleSpace, Self.copyItem, Self.exportItem, .space, Self.newItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, .space,
+        [.toggleSidebar, Self.searchItem, .sidebarTrackingSeparator, .flexibleSpace, .space,
          Self.copyItem, Self.exportItem, Self.newItem, Self.settingsItem]
     }
 
@@ -705,6 +711,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             item.isBordered = true
         }
         switch id {
+        case Self.searchItem:
+            item.label = L("Cerca")
+            item.paletteLabel = L("Cerca nelle discussioni")
+            item.toolTip = L("Cerca nelle discussioni (⌘F)")
+            symbol("magnifyingglass", L("Cerca nelle discussioni"))
+            item.action = #selector(toggleSearch(_:))
         case Self.newItem:
             item.label = L("Nuova discussione")
             item.toolTip = L("Nuova discussione (⌘N)")
@@ -822,7 +834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
                          styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         w.title = L("Aiuto di AI Council")
         w.isReleasedWhenClosed = false
-        w.contentView = NSHostingView(rootView: HelpView().appFont())
+        w.contentView = NSHostingView(rootView: HelpView())
         w.center()
         helpWindow = w
         w.makeKeyAndOrderFront(nil)

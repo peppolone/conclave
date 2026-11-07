@@ -311,11 +311,11 @@ final class ModelsModel: ObservableObject {
 /// Simbolo e colore di uno stato: il colore sta solo sul simbolo, il significato nel testo.
 private func statusSymbol(_ s: String?) -> (String, Color) {
     switch s {
-    case "ok": return ("checkmark.circle.fill", .green)
+    case "ok": return ("checkmark.circle.fill", Brand.success)
     case "checking": return ("clock", .secondary)
-    case "busy": return ("hourglass", .orange)
+    case "busy": return ("hourglass", Brand.warning)
     case "nokey": return ("key", .secondary)
-    case "down", "quota", "gone", "auth", "error": return ("xmark.circle.fill", .red)
+    case "down", "quota", "gone", "auth", "error": return ("xmark.circle.fill", Brand.danger)
     default: return ("circle.dashed", .secondary)
     }
 }
@@ -391,8 +391,8 @@ struct Badge: View {
 
     private var symbol: (String, Color) {
         switch kind {
-        case .free: return ("gift", .green)
-        case .paid: return ("creditcard", .orange)
+        case .free: return ("gift", Brand.success)
+        case .paid: return ("creditcard", Brand.warning)
         case .unknown: return ("questionmark.circle", .secondary)
         case .recommended: return ("star.fill", Brand.accent)
         }
@@ -480,7 +480,7 @@ struct ModelsTab: View {
                 let n = model.selection.models.count
                 Text(n == 1 ? L("1 voce nel consiglio") : String(format: L("%d voci nel consiglio"), n)).foregroundStyle(.secondary)
                 if let saveError {
-                    Text(saveError).foregroundStyle(.red).lineLimit(1).textSelection(.enabled)
+                    Text(saveError).foregroundStyle(Brand.danger).lineLimit(1).textSelection(.enabled)
                 }
                 Spacer()
                 // Senza Esc: nel campo di ricerca Esc deve solo svuotarlo.
@@ -518,10 +518,9 @@ struct ModelsTab: View {
 
             SettingsRow(L("Scelta automatica all'avvio"),
                         detail: L("All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.")) {
-                Toggle("Scelta automatica all'avvio", isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) }))
-                    .labelsHidden()
+                Toggle(L("Scelta automatica all'avvio"), isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) }))
                     .toggleStyle(.switch)
-                    .controlSize(.small)
+                    .labelsHidden()
             }
         }
     }
@@ -628,10 +627,9 @@ struct ModelsTab: View {
                 }
 
                 SettingsRow(L("Mostra solo modelli gratuiti")) {
-                    Toggle("Mostra solo modelli gratuiti", isOn: $model.onlyFree)
-                        .labelsHidden()
+                    Toggle(L("Mostra solo modelli gratuiti"), isOn: $model.onlyFree)
                         .toggleStyle(.switch)
-                        .controlSize(.small)
+                        .labelsHidden()
                 }
 
                 let families = model.visibleFamilies
@@ -643,7 +641,7 @@ struct ModelsTab: View {
                         Label {
                             Text(String(format: L("Catalogo non disponibile: %@"), e)).textSelection(.enabled)
                         } icon: {
-                            Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                            Image(systemName: "xmark.octagon.fill").foregroundStyle(Brand.danger)
                         }
                     } else {
                         Text(families.count == 1 ? L("1 famiglia") : String(format: L("%d famiglie"), families.count))
@@ -689,7 +687,7 @@ struct ModelsTab: View {
                     Label {
                         Text("Nel consiglio")
                     } icon: {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Brand.success)
                     }
                     .foregroundStyle(.secondary).fixedSize()
                 } else {

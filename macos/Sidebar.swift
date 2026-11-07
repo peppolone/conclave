@@ -8,15 +8,19 @@ import SwiftUI
 struct DebateSummary: Decodable, Identifiable, Equatable {
     let id: Int
     let question: String
+    let title: String?
     let status: String
     let created_at: String
     let parent_id: Int?
+    var displayTitle: String { debateTitle(title, question: question) }
 }
 
 @MainActor
 final class SidebarModel: ObservableObject {
     @Published var items: [DebateSummary] = []
     @Published var query = ""
+    /// Campo di ricerca mostrato in cima alla barra laterale (si apre dalla lente nella toolbar o con ⌘F).
+    @Published var searchVisible = false
     @Published var selected: Int?
     /// Discussione per cui è aperta la conferma di eliminazione.
     @Published var pendingDelete: DebateSummary?
@@ -71,9 +75,24 @@ final class SidebarModel: ObservableObject {
         pendingDelete = d
     }
 
+    /// Mostra il campo di ricerca e ci porta il fuoco (il campo nasce al giro successivo).
     func focusSearch() {
-        guard let f = searchField else { return }
-        f.window?.makeFirstResponder(f)
+        searchVisible = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(60))
+            guard let f = searchField else { return }
+            f.window?.makeFirstResponder(f)
+        }
+    }
+
+    /// Lente della toolbar: apre la ricerca, o la richiude se è aperta e vuota.
+    func toggleSearch() {
+        if searchVisible && query.isEmpty { searchVisible = false } else { focusSearch() }
+    }
+
+    /// Chiude la ricerca solo se non c'è niente di scritto (la lista resta filtrata finché c'è testo).
+    func closeSearchIfEmpty() {
+        if query.trimmingCharacters(in: .whitespaces).isEmpty { searchVisible = false }
     }
 
     func delete(_ id: Int) {
@@ -141,6 +160,7 @@ struct SidebarSearchField: NSViewRepresentable {
         f.target = context.coordinator
         f.action = #selector(Coordinator.changed(_:))
         f.setAccessibilityLabel(L("Cerca nelle discussioni"))
+        f.delegate = context.coordinator
         model.searchField = f
         return f
     }
@@ -150,7 +170,7 @@ struct SidebarSearchField: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
         let model: SidebarModel
         init(model: SidebarModel) { self.model = model }
 
@@ -159,6 +179,15 @@ struct SidebarSearchField: NSViewRepresentable {
             model.query = sender.stringValue
             model.queryChanged()
         }
+
+        // Esc con il campo vuoto chiude la ricerca (con del testo lo svuota, come di sistema).
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+            guard sel == #selector(NSResponder.cancelOperation(_:)), model.query.isEmpty else { return false }
+            model.searchVisible = false
+            return true
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) { model.closeSearchIfEmpty() }
     }
 }
 
@@ -170,8 +199,12 @@ struct SidebarView: View {
             VStack(spacing: 6) {
                 SidebarActionRow(title: L("Nuova discussione"), systemImage: "square.and.pencil",
                                  help: L("Inizia una nuova discussione (⌘N)")) { model.onNew?() }
-                SidebarSearchField(model: model)
+                if model.searchVisible || !model.query.isEmpty {
+                    SidebarSearchField(model: model)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
+            .animation(.easeOut(duration: 0.15), value: model.searchVisible)
             .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
 
             List(selection: Binding(get: { model.selected }, set: { id in
@@ -255,7 +288,7 @@ struct SidebarView: View {
     }
 
     private var deleteTitle: String {
-        guard let q = model.pendingDelete?.question else { return L("Eliminare la discussione?") }
+        guard let q = model.pendingDelete?.displayTitle else { return L("Eliminare la discussione?") }
         let short = q.count > 60 ? String(q.prefix(60)) + "…" : q
         return String(format: L("Eliminare la discussione «%@»?"), short)
     }
@@ -337,7 +370,7 @@ struct DebateRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(debate.question)
+                Text(debate.displayTitle)
                     .fontWeight(selected ? .medium : .regular)
                     .lineLimit(1)
                     .truncationMode(.tail)

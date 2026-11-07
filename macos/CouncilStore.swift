@@ -45,9 +45,24 @@ struct PhaseState: Identifiable, Equatable {
     var startedAt: Date? = nil    // quando è iniziata la fase (solo in diretta): per "In attesa · 12 s"
 }
 
+/// Titolo da mostrare per una discussione: quello scritto dal giudice o, finché manca
+/// (dibattito in corso, discussioni vecchie), l'inizio della domanda in poche parole.
+func debateTitle(_ title: String?, question: String) -> String {
+    if let t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
+    let q = question.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    // Prima frase, se basta; altrimenti le prime parole.
+    let first = q.split(omittingEmptySubsequences: true, whereSeparator: { ".?!;:".contains($0) }).first.map(String.init) ?? q
+    let words = first.split(separator: " ")
+    let t = words.count <= 8 ? first + (first.count < q.count && q[q.index(q.startIndex, offsetBy: first.count)] == "?" ? "?" : "")
+        : words.prefix(7).joined(separator: " ") + "…"
+    return t.prefix(1).uppercased() + t.dropFirst()
+}
+
 struct DebateState: Equatable {
     let id: Int
     var question: String
+    var title: String?
+    var displayTitle: String { debateTitle(title, question: question) }
     var rounds: Int?
     var judgeLabel: String?
     var parentId: Int?
@@ -64,7 +79,7 @@ struct DebateState: Equatable {
 
     static func == (a: DebateState, b: DebateState) -> Bool {
         a.id == b.id && a.status == b.status && a.phases == b.phases && a.verdict == b.verdict
-            && a.statusText == b.statusText && a.question == b.question && a.finishedAt == b.finishedAt
+            && a.statusText == b.statusText && a.question == b.question && a.title == b.title && a.finishedAt == b.finishedAt
             && a.judging == b.judging
     }
 }
@@ -356,7 +371,8 @@ final class CouncilStore: ObservableObject {
             d.judging = false
             d.finishedAt = .now
             d.statusText = status == "done" ? Self.statusText("done") : (e["error"] as? String ?? status)
-            if status == "done" { onVerdictReady?(d.question) }
+            if let t = e["title"] as? String { d.title = t }
+            if status == "done" { onVerdictReady?(d.displayTitle) }
             onHistoryChanged?()
         default:
             break
@@ -409,6 +425,7 @@ final class CouncilStore: ObservableObject {
                             judgeLabel: nil, parentId: j["parent_id"] as? Int, status: status,
                             statusText: Self.statusText(status), startedAt: Self.date(j["created_at"]),
                             finishedAt: Self.date(j["finished_at"]))
+        d.title = j["title"] as? String
         if let o = opts, let jid = o["judge"] as? String {
             d.judgeLabel = jid == "claude" ? "Claude \((o["claudeModel"] as? String ?? "sonnet").capitalized)"
                 : (voices.first { $0.id == jid }?.label ?? jid)
@@ -507,23 +524,28 @@ final class CouncilStore: ObservableObject {
 
     /// Riga sotto la domanda: "3 round · giudice Claude Sonnet · durata 1 min 34 s".
     func meta(_ d: DebateState) -> String {
-        var parts: [String] = []
-        if let r = d.rounds { parts.append(r == 0 ? L("senza round") : String(format: L("%d round"), r)) }
-        if let j = d.judgeLabel { parts.append(String(format: L("giudice %@"), j)) }
+        metaItems(d).map(\.text).joined(separator: " · ")
+    }
+
+    /// Round, giudice e durata, ciascuno con il simbolo da mostrare nell'intestazione.
+    func metaItems(_ d: DebateState) -> [(symbol: String, text: String)] {
+        var parts: [(symbol: String, text: String)] = []
+        if let r = d.rounds { parts.append(("arrow.triangle.2.circlepath", r == 0 ? L("senza round") : String(format: L("%d round"), r))) }
+        if let j = d.judgeLabel { parts.append(("person.fill.checkmark", String(format: L("giudice %@"), j))) }
         if let s = d.startedAt {
             let end = d.finishedAt ?? (d.isRunning ? Date.now : nil)
             if let end {
                 let secs = max(0, Int(end.timeIntervalSince(s)))
                 let dur = secs >= 60 ? String(format: L("%d min %d s"), secs / 60, secs % 60) : String(format: L("%d s"), secs)
-                parts.append(String(format: d.isRunning ? L("in corso da %@") : L("durata %@"), dur))
+                parts.append(("clock", String(format: d.isRunning ? L("in corso da %@") : L("durata %@"), dur)))
             }
         }
-        return parts.joined(separator: " · ")
+        return parts
     }
 
     func exportMarkdown() -> (filename: String, text: String)? {
         guard let d = current else { return nil }
-        var out = ["# \(d.question)", "", "_\(meta(d))_", ""]
+        var out = ["# \(d.displayTitle)", "", "> " + d.question.replacingOccurrences(of: "\n", with: "\n> "), "", "_\(meta(d))_", ""]
         if let v = d.verdict { out += ["## " + L("Verdetto"), "", v, ""] }
         for p in d.phases {
             out += ["## \(p.title)", ""]
@@ -534,7 +556,7 @@ final class CouncilStore: ObservableObject {
                 out.append("")
             }
         }
-        let slug = d.question.folding(options: .diacriticInsensitive, locale: .current).lowercased()
+        let slug = d.displayTitle.folding(options: .diacriticInsensitive, locale: .current).lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return ((slug.isEmpty ? L("dibattito") : String(slug.prefix(60))) + ".md", out.joined(separator: "\n"))
