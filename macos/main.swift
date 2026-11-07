@@ -83,7 +83,7 @@ final class ServerController {
             guard let self else { return }
             let path = Self.loginPath()
             guard let node = Self.find("node", in: path) else {
-                DispatchQueue.main.async { self.onCrash?("Node.js non trovato. Installalo (es. con nvm) e riapri l'app.") }
+                DispatchQueue.main.async { self.onCrash?(L("Node.js non trovato. Installalo (es. con nvm) e riapri l'app.")) }
                 return
             }
             DispatchQueue.main.async { self.launch(node: node, path: path) }
@@ -126,7 +126,7 @@ final class ServerController {
                 guard let self, !self.stopping, self.process === ended else { return }
                 let tail = (try? String(contentsOf: Paths.logFile, encoding: .utf8))?
                     .split(separator: "\n").suffix(8).joined(separator: "\n") ?? ""
-                self.onCrash?("Il motore si è fermato inaspettatamente.\n\n\(tail)")
+                self.onCrash?(String(format: L("Il motore si è fermato inaspettatamente.\n\n%@"), tail))
             }
         }
 
@@ -134,7 +134,7 @@ final class ServerController {
             try p.run()
             process = p
         } catch {
-            onCrash?("Impossibile avviare il motore: \(error.localizedDescription)")
+            onCrash?(String(format: L("Impossibile avviare il motore: %@"), error.localizedDescription))
         }
     }
 
@@ -160,8 +160,10 @@ final class ServerController {
 // MARK: - Finestra
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSMenuItemValidation, NSToolbarItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSMenuItemValidation, NSToolbarItemValidation, NSMenuDelegate {
     private var window: NSWindow!
+    /// Icona nella barra dei menu (facoltativa, Impostazioni ▸ Generale).
+    private var statusItem: NSStatusItem?
     private var split: NSSplitViewController!
     private var sidebarItem: NSSplitViewItem!
     private var observers: Set<AnyCancellable> = []
@@ -187,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         seedSettings()
+        _ = AppLanguage.launched
         // Tema salvato (Sistema / Chiaro / Scuro) prima di creare la finestra.
         AppAppearance.apply()
         buildMenu()
@@ -203,10 +206,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         }
         server.onCrash = { [weak self] message in self?.showCrash(message) }
         server.start()
+        updateStatusItem()
+        NotificationCenter.default.addObserver(forName: MenuBarPreference.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateStatusItem() }
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// Con l'icona nella barra dei menu l'app resta attiva anche a finestra chiusa.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarPreference.enabled }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Anche con Impostazioni o Aiuto aperti il clic sul Dock riporta la finestra principale.
+        if !window.isVisible { showMainWindow(nil) }
+        return true
+    }
 
     func applicationWillTerminate(_ notification: Notification) { server.stop() }
 
@@ -229,15 +243,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             openSettings: { [weak self] in self?.openSettings(nil) },
             openModels: { [weak self] in self?.seedSettings(); self?.settings.show(tab: .models) },
             saveFile: { [weak self] name, text in self?.saveMarkdown(filename: name, text: text) })
-        content = NSHostingView(rootView: root)
+        content = NSHostingView(rootView: root.appFont())
         content.isHidden = true
         store.onHistoryChanged = { [weak self] in self?.sidebar.reload() }
         store.onCurrentChanged = { [weak self] id in self?.sidebar.selected = id }
         store.onVerdictReady = { [weak self] q in
-            self?.verdictReady(title: "Verdetto pronto", body: q.count > 80 ? String(q.prefix(80)) + "…" : q)
+            self?.verdictReady(title: L("Verdetto pronto"), body: q.count > 80 ? String(q.prefix(80)) + "…" : q)
         }
 
-        status = NSTextField(labelWithString: "Avvio del consiglio…")
+        status = NSTextField(labelWithString: L("Avvio del consiglio…"))
         status.textColor = .secondaryLabelColor
         let spinner = NSProgressIndicator()
         spinner.style = .spinning
@@ -276,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         sidebar.onExport = { [weak self] id in self?.exportDiscussion(id) }
         sidebar.onNew = { [weak self] in self?.newDebate(nil) }
         sidebar.onSettings = { [weak self] in self?.openSettings(nil) }
-        sidebarItem = NSSplitViewItem(sidebarWithViewController: NSHostingController(rootView: SidebarView(model: sidebar)))
+        sidebarItem = NSSplitViewItem(sidebarWithViewController: NSHostingController(rootView: SidebarView(model: sidebar).appFont()))
         sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 380
         sidebarItem.canCollapse = true
@@ -292,7 +306,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
-        window.title = "Nuova discussione"
+        window.title = L("Nuova discussione")
+        // La domanda è già il titolo della pagina: nella toolbar non si ripete (resta per il menu Finestra).
+        window.titleVisibility = .hidden
+        window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 760, height: 520)
         // Sfondo coerente con il marchio (si vede durante l'avvio e dietro la toolbar);
         // la barra laterale resta il vetro di sistema.
@@ -335,17 +352,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             .store(in: &observers)
     }
 
+    // MARK: Barra dei menu
+
+    private func updateStatusItem() {
+        guard MenuBarPreference.enabled else {
+            if let s = statusItem { NSStatusBar.system.removeStatusItem(s) }
+            statusItem = nil
+            return
+        }
+        guard statusItem == nil else { return }
+        let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        s.button?.image = Self.menuBarImage
+        s.button?.setAccessibilityLabel("AI Council")
+        s.button?.toolTip = "AI Council"
+        let menu = NSMenu()
+        menu.delegate = self
+        s.menu = menu
+        statusItem = s
+    }
+
+    /// Logo del consiglio in versione monocroma (template): segue chiaro/scuro della barra.
+    private static let menuBarImage: NSImage = {
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { r in
+            let u = r.width / 1024
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+            let lines = NSBezierPath()
+            lines.lineWidth = 60 * u
+            lines.lineCapStyle = .round
+            lines.move(to: NSPoint(x: 512 * u, y: 390 * u)); lines.line(to: NSPoint(x: 350 * u, y: 610 * u))
+            lines.move(to: NSPoint(x: 512 * u, y: 390 * u)); lines.line(to: NSPoint(x: 674 * u, y: 610 * u))
+            lines.move(to: NSPoint(x: 380 * u, y: 660 * u)); lines.line(to: NSPoint(x: 644 * u, y: 660 * u))
+            lines.stroke()
+            for (x, y) in [(512.0, 300.0), (290, 690), (734, 690)] {
+                let rad = 150 * u
+                NSBezierPath(ovalIn: NSRect(x: x * u - rad, y: y * u - rad, width: rad * 2, height: rad * 2)).fill()
+            }
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }()
+
+    /// Il menu dell'icona si ricostruisce a ogni apertura: le discussioni recenti sono sempre aggiornate.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        menu.removeAllItems()
+        menu.addItem(item(L("Nuova discussione"), #selector(newDebateFromMenuBar(_:)), ""))
+        menu.addItem(item(L("Mostra AI Council"), #selector(showMainWindow(_:)), ""))
+        // Con una ricerca attiva la lista della barra laterale è filtrata: niente recenti parziali.
+        let recent = sidebar.query.trimmingCharacters(in: .whitespaces).isEmpty ? sidebar.items.prefix(5) : []
+        if !recent.isEmpty {
+            menu.addItem(.separator())
+            let header = NSMenuItem(title: L("Recenti"), action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for d in recent {
+                let i = item(Self.short(d.question, 48), #selector(openRecent(_:)), "")
+                i.tag = d.id
+                i.toolTip = d.question
+                menu.addItem(i)
+            }
+        }
+        menu.addItem(.separator())
+        menu.addItem(item(L("Impostazioni…"), #selector(openSettings(_:)), ""))
+        let quit = NSMenuItem(title: L("Esci da AI Council"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        menu.addItem(quit)
+    }
+
+    @objc func showMainWindow(_ sender: Any?) {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func newDebateFromMenuBar(_ sender: Any?) {
+        showMainWindow(nil)
+        newDebate(nil)
+    }
+
+    @objc func openRecent(_ sender: NSMenuItem) {
+        showMainWindow(nil)
+        sidebar.selected = sender.tag
+        Task { await store.open(sender.tag) }
+    }
+
     private static let titleDate: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = AppLanguage.locale
         f.dateFormat = "d MMM, HH:mm"
         return f
     }()
 
     private func updateTitle(_ d: DebateState?, parent: ParentRef?) {
         guard let d else {
-            window.title = "Nuova discussione"
-            window.subtitle = parent.map { "Approfondimento di «\(Self.short($0.question, 40))»" } ?? ""
+            window.title = L("Nuova discussione")
+            window.subtitle = parent.map { String(format: L("Approfondimento di «%@»"), Self.short($0.question, 40)) } ?? ""
             updateToolbarItems(hasDebate: false)
             return
         }
@@ -353,10 +454,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         var parts: [String] = []
         if d.isRunning {
             let phase = d.phases.last?.title
-            window.subtitle = phase.map { "In corso — \($0)" } ?? "In corso"
+            window.subtitle = phase.map { String(format: L("In corso — %@"), $0) } ?? L("In corso")
         } else {
-            if let r = d.rounds { parts.append(r == 0 ? "senza round" : "\(r) round") }
-            if !d.participants.isEmpty { parts.append("\(d.participants.count) modelli") }
+            if let r = d.rounds { parts.append(r == 0 ? L("senza round") : String(format: L("%d round"), r)) }
+            if !d.participants.isEmpty { parts.append(String(format: L("%d modelli"), d.participants.count)) }
             if let s = d.startedAt { parts.append(Self.titleDate.string(from: s)) }
             if d.status != "done" { parts.append(CouncilStore.statusText(d.status)) }
             window.subtitle = parts.joined(separator: " · ")
@@ -380,13 +481,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         content.isHidden = true
         store.engineStopped()
         loading.isHidden = false
-        status.stringValue = "Motore non attivo"
+        status.stringValue = L("Motore non attivo")
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "AI Council non riesce a funzionare"
+        alert.messageText = L("AI Council non riesce a funzionare")
         alert.informativeText = message
-        alert.addButton(withTitle: "Riprova")
-        alert.addButton(withTitle: "Esci")
+        alert.addButton(withTitle: L("Riprova"))
+        alert.addButton(withTitle: L("Esci"))
         alert.beginSheetModal(for: window) { [weak self] r in
             if r == .alertFirstButtonReturn { self?.restartServer(nil) } else { NSApp.terminate(nil) }
         }
@@ -398,82 +499,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         let main = NSMenu()
 
         let app = NSMenu()
-        app.addItem(withTitle: "Informazioni su AI Council", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        app.addItem(withTitle: L("Informazioni su AI Council"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(item("Impostazioni…", #selector(openSettings(_:)), ","))
-        app.addItem(item("Apri cartella dati", #selector(openDataFolder(_:)), ""))
-        app.addItem(item("Riavvia motore", #selector(restartServer(_:)), "r", [.command, .shift]))
+        app.addItem(item(L("Impostazioni…"), #selector(openSettings(_:)), ","))
+        app.addItem(item(L("Apri cartella dati"), #selector(openDataFolder(_:)), ""))
+        app.addItem(item(L("Riavvia motore"), #selector(restartServer(_:)), "r", [.command, .shift]))
         app.addItem(.separator())
-        let services = NSMenu(title: "Servizi")
-        let servicesItem = NSMenuItem(title: "Servizi", action: nil, keyEquivalent: "")
+        let services = NSMenu(title: L("Servizi"))
+        let servicesItem = NSMenuItem(title: L("Servizi"), action: nil, keyEquivalent: "")
         servicesItem.submenu = services
         app.addItem(servicesItem)
         NSApp.servicesMenu = services
         app.addItem(.separator())
-        app.addItem(withTitle: "Nascondi AI Council", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        app.addItem(withTitle: "Nascondi altre", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        app.addItem(withTitle: L("Nascondi AI Council"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(withTitle: L("Nascondi altre"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
             .keyEquivalentModifierMask = [.command, .option]
-        app.addItem(withTitle: "Mostra tutte", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        app.addItem(withTitle: L("Mostra tutte"), action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(withTitle: "Esci da AI Council", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: L("Esci da AI Council"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
-        let file = NSMenu(title: "Archivio")
-        file.addItem(item("Nuova discussione", #selector(newDebate(_:)), "n"))
+        let file = NSMenu(title: L("Archivio"))
+        file.addItem(item(L("Nuova discussione"), #selector(newDebate(_:)), "n"))
         file.addItem(.separator())
-        file.addItem(withTitle: "Chiudi finestra", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.addItem(withTitle: L("Chiudi finestra"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
-        let edit = NSMenu(title: "Modifica")
-        edit.addItem(withTitle: "Annulla", action: Selector(("undo:")), keyEquivalent: "z")
-        edit.addItem(withTitle: "Ripeti", action: Selector(("redo:")), keyEquivalent: "Z")
+        let edit = NSMenu(title: L("Modifica"))
+        // "Annulla" è anche il pulsante Cancel: chiave distinta per l'inglese "Undo".
+        edit.addItem(withTitle: NSLocalizedString("menu.undo", value: "Annulla", comment: ""), action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: L("Ripeti"), action: Selector(("redo:")), keyEquivalent: "Z")
         edit.addItem(.separator())
-        edit.addItem(withTitle: "Taglia", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copia", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Incolla", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: L("Taglia"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: L("Copia"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: L("Incolla"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         // ⌫ senza modificatori: la voce si disattiva quando si scrive in un campo di testo,
         // così il tasto torna al campo (vedi validateMenuItem).
-        edit.addItem(item("Elimina", #selector(deleteDiscussion(_:)), "\u{8}", []))
-        edit.addItem(withTitle: "Seleziona tutto", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(item(L("Elimina"), #selector(deleteDiscussion(_:)), "\u{8}", []))
+        edit.addItem(withTitle: L("Seleziona tutto"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         edit.addItem(.separator())
-        let find = NSMenu(title: "Trova")
-        find.addItem(item("Cerca nelle discussioni", #selector(findDiscussions(_:)), "f"))
-        let findItem = NSMenuItem(title: "Trova", action: nil, keyEquivalent: "")
+        let find = NSMenu(title: L("Trova"))
+        find.addItem(item(L("Cerca nelle discussioni"), #selector(findDiscussions(_:)), "f"))
+        let findItem = NSMenuItem(title: L("Trova"), action: nil, keyEquivalent: "")
         findItem.submenu = find
         edit.addItem(findItem)
 
-        let view = NSMenu(title: "Vista")
+        let view = NSMenu(title: L("Vista"))
         // L'etichetta diventa "Mostra…" o "Nascondi…" in validateMenuItem.
-        view.addItem(item("Nascondi barra laterale", #selector(toggleSidebar(_:)), "s", [.command, .control]))
-        view.addItem(withTitle: "Personalizza la barra strumenti…", action: #selector(NSWindow.runToolbarCustomizationPalette(_:)), keyEquivalent: "")
+        view.addItem(item(L("Nascondi barra laterale"), #selector(toggleSidebar(_:)), "s", [.command, .control]))
+        view.addItem(withTitle: L("Personalizza la barra strumenti…"), action: #selector(NSWindow.runToolbarCustomizationPalette(_:)), keyEquivalent: "")
         view.addItem(.separator())
-        view.addItem(item("Ricarica", #selector(reload(_:)), "r"))
+        view.addItem(item(L("Ricarica"), #selector(reload(_:)), "r"))
         view.addItem(.separator())
-        view.addItem(withTitle: "Modalità a tutto schermo", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        view.addItem(withTitle: L("Modalità a tutto schermo"), action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
             .keyEquivalentModifierMask = [.command, .control]
 
         // Menu dell'app: comandi della discussione (disattivati quando non applicabili).
-        let debate = NSMenu(title: "Discussione")
-        debate.addItem(item("Avvia", #selector(startDebate(_:)), "\r"))
-        debate.addItem(item("Interrompi", #selector(stopDebate(_:)), "."))
+        let debate = NSMenu(title: L("Discussione"))
+        debate.addItem(item(L("Avvia"), #selector(startDebate(_:)), "\r"))
+        debate.addItem(item(L("Interrompi"), #selector(stopDebate(_:)), "."))
         debate.addItem(.separator())
-        debate.addItem(item("Copia verdetto", #selector(copyVerdict(_:)), "c", [.command, .shift]))
-        debate.addItem(item("Esporta come Markdown…", #selector(exportDebate(_:)), "e", [.command, .shift]))
-        debate.addItem(item("Approfondisci…", #selector(deepenDebate(_:)), "d"))
+        debate.addItem(item(L("Copia verdetto"), #selector(copyVerdict(_:)), "c", [.command, .shift]))
+        debate.addItem(item(L("Esporta come Markdown…"), #selector(exportDebate(_:)), "e", [.command, .shift]))
+        debate.addItem(item(L("Approfondisci…"), #selector(deepenDebate(_:)), "d"))
 
-        let win = NSMenu(title: "Finestra")
-        win.addItem(withTitle: "Contrai", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        win.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        let win = NSMenu(title: L("Finestra"))
+        win.addItem(withTitle: L("Contrai"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        win.addItem(withTitle: L("Zoom"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         win.addItem(.separator())
-        win.addItem(withTitle: "Porta tutto in primo piano", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        win.addItem(withTitle: L("Porta tutto in primo piano"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         NSApp.windowsMenu = win
 
-        let help = NSMenu(title: "Aiuto")
-        help.addItem(item("Aiuto di AI Council", #selector(showHelp(_:)), "?"))
+        let help = NSMenu(title: L("Aiuto"))
+        help.addItem(item(L("Aiuto di AI Council"), #selector(showHelp(_:)), "?"))
         help.addItem(.separator())
-        help.addItem(item("Mostra registro del motore", #selector(openLog(_:)), ""))
+        help.addItem(item(L("Mostra registro del motore"), #selector(openLog(_:)), ""))
         NSApp.helpMenu = help
 
-        for (title, menu) in [("AI Council", app), ("Archivio", file), ("Modifica", edit), ("Vista", view),
-                              ("Discussione", debate), ("Finestra", win), ("Aiuto", help)] {
+        for (title, menu) in [("AI Council", app), (L("Archivio"), file), (L("Modifica"), edit), (L("Vista"), view),
+                              (L("Discussione"), debate), (L("Finestra"), win), (L("Aiuto"), help)] {
             let top = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             top.submenu = menu
             main.addItem(top)
@@ -489,6 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     }
 
     @objc func newDebate(_ sender: Any?) {
+        if !window.isVisible { showMainWindow(nil) }
         sidebar.selected = nil
         store.newDiscussion()
     }
@@ -551,7 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         let d = store.current
         switch menuItem.action {
         case #selector(toggleSidebar(_:)):
-            menuItem.title = sidebarItem.isCollapsed ? "Mostra barra laterale" : "Nascondi barra laterale"
+            menuItem.title = sidebarItem.isCollapsed ? L("Mostra barra laterale") : L("Nascondi barra laterale")
             return true
         case #selector(deleteDiscussion(_:)):
             return NSApp.keyWindow === window && focusInSidebar && sidebar.selected != nil
@@ -603,27 +706,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         }
         switch id {
         case Self.newItem:
-            item.label = "Nuova discussione"
-            item.toolTip = "Nuova discussione (⌘N)"
-            symbol("square.and.pencil", "Nuova discussione")
+            item.label = L("Nuova discussione")
+            item.toolTip = L("Nuova discussione (⌘N)")
+            symbol("square.and.pencil", L("Nuova discussione"))
             item.action = #selector(newDebate(_:))
         case Self.copyItem:
-            item.label = "Copia verdetto"
-            item.toolTip = "Copia il verdetto (⇧⌘C)"
-            symbol("doc.on.doc", "Copia verdetto")
+            item.label = L("Copia verdetto")
+            item.toolTip = L("Copia il verdetto (⇧⌘C)")
+            symbol("doc.on.doc", L("Copia verdetto"))
             item.action = #selector(copyVerdict(_:))
             item.isHidden = store.current == nil
         case Self.exportItem:
-            item.label = "Esporta"
-            item.paletteLabel = "Esporta come Markdown"
-            item.toolTip = "Esporta come Markdown (⇧⌘E)"
-            symbol("square.and.arrow.up", "Esporta come Markdown")
+            item.label = L("Esporta")
+            item.paletteLabel = L("Esporta come Markdown")
+            item.toolTip = L("Esporta come Markdown (⇧⌘E)")
+            symbol("square.and.arrow.up", L("Esporta come Markdown"))
             item.action = #selector(exportDebate(_:))
             item.isHidden = store.current == nil
         case Self.settingsItem:
-            item.label = "Impostazioni"
-            item.toolTip = "Impostazioni (⌘,)"
-            symbol("gearshape", "Impostazioni")
+            item.label = L("Impostazioni")
+            item.toolTip = L("Impostazioni (⌘,)")
+            symbol("gearshape", L("Impostazioni"))
             item.action = #selector(openSettings(_:))
         default:
             return nil
@@ -656,7 +759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty || name == ".md" { name = "discussione" }
+        if name.isEmpty || name == ".md" { name = L("discussione") }
         if !name.lowercased().hasSuffix(".md") { name += ".md" }
 
         let panel = NSSavePanel()
@@ -672,7 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
                 guard let self else { return }
                 let alert = NSAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "Impossibile salvare il file"
+                alert.messageText = L("Impossibile salvare il file")
                 alert.informativeText = error.localizedDescription
                 alert.beginSheetModal(for: self.window)
             }
@@ -717,9 +820,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         if let w = helpWindow { w.makeKeyAndOrderFront(nil); return }
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
                          styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        w.title = "Aiuto di AI Council"
+        w.title = L("Aiuto di AI Council")
         w.isReleasedWhenClosed = false
-        w.contentView = NSHostingView(rootView: HelpView())
+        w.contentView = NSHostingView(rootView: HelpView().appFont())
         w.center()
         helpWindow = w
         w.makeKeyAndOrderFront(nil)
@@ -729,7 +832,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         content.isHidden = true
         store.engineStopped()
         loading.isHidden = false
-        status.stringValue = "Riavvio del motore…"
+        status.stringValue = L("Riavvio del motore…")
         port = 0
         server.stop()
         server.start()
@@ -752,11 +855,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
 struct HelpView: View {
     private let topics: [(String, String)] = [
-        ("Come funziona", "Più modelli rispondono alla stessa domanda, si criticano a vicenda per il numero di round scelto e rivedono la propria posizione. Alla fine il giudice scrive il verdetto."),
-        ("Avviare una discussione", "Scrivi la domanda, scegli almeno due partecipanti, i round e il giudice, poi premi Avvia (⌘↩)."),
-        ("Chiavi API", "Claude funziona se hai Claude Code con un abbonamento Claude. Per gli altri modelli aggiungi una chiave gratuita di Gemini, Groq o OpenRouter in Impostazioni (⌘,)."),
-        ("Cronologia", "Le discussioni restano nella barra laterale. Cerca con ⌘F, elimina con ⌫ o con il clic destro."),
-        ("Se qualcosa non va", "Usa AI Council ▸ Riavvia motore (⇧⌘R) oppure Aiuto ▸ Mostra registro del motore."),
+        (L("Come funziona"), L("Più modelli rispondono alla stessa domanda, si criticano a vicenda per il numero di round scelto e rivedono la propria posizione. Alla fine il giudice scrive il verdetto.")),
+        (L("Avviare una discussione"), L("Scrivi la domanda, scegli almeno due partecipanti, i round e il giudice, poi premi Avvia (⌘↩).")),
+        (L("Chiavi API"), L("Claude funziona se hai Claude Code con un abbonamento Claude. Per gli altri modelli aggiungi una chiave gratuita di Gemini, Groq o OpenRouter in Impostazioni (⌘,).")),
+        (L("Cronologia"), L("Le discussioni restano nella barra laterale. Cerca con ⌘F, elimina con ⌫ o con il clic destro.")),
+        (L("Se qualcosa non va"), L("Usa AI Council ▸ Riavvia motore (⇧⌘R) oppure Aiuto ▸ Mostra registro del motore.")),
     ]
 
     var body: some View {

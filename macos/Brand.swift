@@ -32,6 +32,28 @@ enum Brand {
             : .white
     })
 
+    /// Fondo della riga selezionata (barra laterale, elenchi): accento del marchio, tenue.
+    static let selection = Color(nsColor: NSColor(name: "BrandSelection") { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0x8a / 255, green: 0xa4 / 255, blue: 1, alpha: 0.22)
+            : NSColor(srgbRed: 0x4a / 255, green: 0x6c / 255, blue: 0xf0 / 255, alpha: 0.13)
+    })
+
+    /// Fondo tenue del verdetto: superficie appena tinta dell'accento.
+    static let verdictSurface = Color(nsColor: NSColor(name: "BrandVerdictSurface") { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0x1e / 255, green: 0x26 / 255, blue: 0x3d / 255, alpha: 1)
+            : NSColor(srgbRed: 0xfb / 255, green: 0xfc / 255, blue: 1, alpha: 1)
+    })
+
+    // Spaziature e raggi comuni (pt).
+    enum Space {
+        static let xs: CGFloat = 4, s: CGFloat = 8, m: CGFloat = 12, l: CGFloat = 16, xl: CGFloat = 24, xxl: CGFloat = 32
+    }
+    enum Radius {
+        static let control: CGFloat = 8, card: CGFloat = 12, panel: CGFloat = 16, composer: CGFloat = 20
+    }
+
     /// Bordo sottile dei riquadri.
     static let hairline = Color(nsColor: NSColor(name: "BrandHairline") { a in
         a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -92,9 +114,9 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .system: "Sistema"
-        case .light: "Chiaro"
-        case .dark: "Scuro"
+        case .system: L("Sistema")
+        case .light: L("Chiaro")
+        case .dark: L("Scuro")
         }
     }
 

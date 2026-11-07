@@ -111,7 +111,7 @@ final class ModelsModel: ObservableObject {
         let (data, resp) = try await URLSession.shared.data(from: u)
         if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
             let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? "errore \(h.statusCode)"])
+            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -125,7 +125,7 @@ final class ModelsModel: ObservableObject {
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
             let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? "errore \(h.statusCode)"])
+            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
         }
         return data
     }
@@ -147,7 +147,7 @@ final class ModelsModel: ObservableObject {
                 await ensureCatalog(p)
             }
         } catch {
-            engineError = "Il motore non è pronto. Riprova tra qualche secondo."
+            engineError = L("Il motore non è pronto. Riprova tra qualche secondo.")
         }
     }
 
@@ -239,7 +239,7 @@ final class ModelsModel: ObservableObject {
                let r = try? JSONDecoder().decode(ProbeDTO.self, from: data) {
                 probes[key] = r
             } else {
-                probes[key] = ProbeDTO(status: "error", ms: 0, message: "motore non raggiungibile")
+                probes[key] = ProbeDTO(status: "error", ms: 0, message: L("motore non raggiungibile"))
             }
         }
     }
@@ -294,7 +294,7 @@ final class ModelsModel: ObservableObject {
     }
 
     func providerName(_ id: String?) -> String {
-        guard let id else { return "Abbonamento Claude (Claude Code)" }
+        guard let id else { return L("Abbonamento Claude (Claude Code)") }
         return providers.first { $0.id == id }?.name ?? id
     }
 
@@ -322,39 +322,40 @@ private func statusSymbol(_ s: String?) -> (String, Color) {
 
 private func statusText(_ h: HealthDTO?) -> String {
     switch h?.status {
-    case "ok": return "Risponde"
-    case "checking": return "Verifica in corso"
-    case "busy": return "Sovraccarico"
-    case "down": return "Non risponde"
-    case "quota": return "Quota esaurita"
-    case "gone": return "Ritirato dal provider"
-    case "auth": return "Chiave non valida"
-    case "error": return "Errore"
-    case "nokey": return "Manca la chiave"
-    default: return "Non verificato"
+    case "ok": return L("Risponde")
+    case "checking": return L("Verifica in corso")
+    case "busy": return L("Sovraccarico")
+    case "down": return L("Non risponde")
+    case "quota": return L("Quota esaurita")
+    case "gone": return L("Ritirato dal provider")
+    case "auth": return L("Chiave non valida")
+    case "error": return L("Errore")
+    case "nokey": return L("Manca la chiave")
+    default: return L("Non verificato")
     }
 }
 
 private func probeText(_ p: ProbeDTO) -> String {
     switch p.status {
-    case "ok": return "Risponde in \(String(format: "%.1f", Double(p.ms) / 1000)) s"
-    case "busy": return "Sovraccarico ora, riprova più tardi"
-    case "quota": return "Non incluso nel piano gratuito o quota esaurita"
-    case "gone": return "Non disponibile per il tuo account"
-    case "auth": return "Chiave non valida"
-    default: return "Non risponde: \(p.message ?? "errore sconosciuto")"
+    case "ok": return String(format: L("Risponde in %@ s"), String(format: "%.1f", Double(p.ms) / 1000))
+    case "busy": return L("Sovraccarico ora, riprova più tardi")
+    case "quota": return L("Non incluso nel piano gratuito o quota esaurita")
+    case "gone": return L("Non disponibile per il tuo account")
+    case "auth": return L("Chiave non valida")
+    default: return String(format: L("Non risponde: %@"), p.message ?? L("errore sconosciuto"))
     }
 }
 
 private func shortContext(_ n: Int?) -> String? {
     guard let n, n > 0 else { return nil }
-    return n >= 1_000_000 ? "\(n / 1_000_000)M token" : "\(n / 1000)k token"
+    return n >= 1_000_000 ? String(format: L("%dM token"), n / 1_000_000) : String(format: L("%dk token"), n / 1000)
 }
 
 private func dateText(_ s: Double?) -> String? {
     guard let s, s > 0 else { return nil }
     let f = DateFormatter()
-    f.locale = Locale(identifier: "it_IT")
+    // Mese nella lingua dell'interfaccia.
+    f.locale = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "it")
     f.dateFormat = "MMM yyyy"
     return f.string(from: Date(timeIntervalSince1970: s))
 }
@@ -381,10 +382,10 @@ struct Badge: View {
 
     private var text: String {
         switch kind {
-        case .free: return "Gratis"
-        case .paid: return "A pagamento"
-        case .unknown: return "Costo da verificare"
-        case .recommended: return "Consigliato"
+        case .free: return L("Gratis")
+        case .paid: return L("A pagamento")
+        case .unknown: return L("Costo da verificare")
+        case .recommended: return L("Consigliato")
         }
     }
 
@@ -393,7 +394,7 @@ struct Badge: View {
         case .free: return ("gift", .green)
         case .paid: return ("creditcard", .orange)
         case .unknown: return ("questionmark.circle", .secondary)
-        case .recommended: return ("star.fill", .accentColor)
+        case .recommended: return ("star.fill", Brand.accent)
         }
     }
 
@@ -470,21 +471,21 @@ struct ModelsTab: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                SettingsPage("Modelli") {
+                SettingsPage(L("Modelli")) {
                     councilSection
                     catalogSection
                 }
             }
             SettingsBar {
                 let n = model.selection.models.count
-                Text(n == 1 ? "1 voce nel consiglio" : "\(n) voci nel consiglio").foregroundStyle(.secondary)
+                Text(n == 1 ? L("1 voce nel consiglio") : String(format: L("%d voci nel consiglio"), n)).foregroundStyle(.secondary)
                 if let saveError {
                     Text(saveError).foregroundStyle(.red).lineLimit(1).textSelection(.enabled)
                 }
                 Spacer()
                 // Senza Esc: nel campo di ricerca Esc deve solo svuotarlo.
                 Button("Annulla") { Task { await model.load() }; close() }
-                Button(saving ? "Salvataggio…" : "Salva e attiva") {
+                Button(saving ? L("Salvataggio…") : L("Salva e attiva")) {
                     saving = true
                     Task {
                         do { try await model.save(); close() } catch { saveError = error.localizedDescription }
@@ -500,7 +501,7 @@ struct ModelsTab: View {
     // MARK: Voci del consiglio
 
     private var councilSection: some View {
-        SettingsSection("Voci del consiglio", footer: "Ogni voce è una famiglia di modelli. Con “Automatico” l'app usa la variante migliore che risponde e tiene le altre come riserva. “Partecipa di default” la preseleziona nelle nuove discussioni.") {
+        SettingsSection(L("Voci del consiglio"), footer: L("Ogni voce è una famiglia di modelli. Con “Automatico” l'app usa la variante migliore che risponde e tiene le altre come riserva. “Partecipa di default” la preseleziona nelle nuove discussioni.")) {
             ForEach(model.selection.models) { m in voiceRow(m) }
 
             HStack(spacing: 8) {
@@ -515,8 +516,8 @@ struct ModelsTab: View {
                 Button("Aggiorna stato") { Task { await model.recheckHealth() } }
             }
 
-            SettingsRow("Scelta automatica all'avvio",
-                        detail: "All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.") {
+            SettingsRow(L("Scelta automatica all'avvio"),
+                        detail: L("All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia.")) {
                 Toggle("Scelta automatica all'avvio", isOn: Binding(get: { model.selection.auto }, set: { model.setAuto($0) }))
                     .labelsHidden()
                     .toggleStyle(.switch)
@@ -528,23 +529,23 @@ struct ModelsTab: View {
     private func voiceDetail(_ m: SelModel, _ h: HealthDTO?) -> String {
         var parts = [model.providerName(m.provider)]
         let inUse = h?.using ?? h?.chain?.first ?? (m.model == autoModel ? nil : m.model)
-        if let inUse { parts.append("In uso: \(model.modelName(inUse, provider: m.provider))") }
+        if let inUse { parts.append(String(format: L("In uso: %@"), model.modelName(inUse, provider: m.provider))) }
         let reserves = (h?.chain?.count ?? 0) - 1
-        if reserves > 0 { parts.append(reserves == 1 ? "1 riserva" : "\(reserves) riserve") }
+        if reserves > 0 { parts.append(reserves == 1 ? L("1 riserva") : String(format: L("%d riserve"), reserves)) }
         return parts.joined(separator: " · ")
     }
 
     @ViewBuilder
     private func voiceRow(_ m: SelModel) -> some View {
         let h = model.health[m.id]
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(m.label).font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(m.label).font(.headline).lineLimit(1)
                     Text(voiceDetail(m, h))
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                Spacer()
+                Spacer(minLength: 12)
                 StatusLabel(text: statusText(h), status: h?.status)
             }
             if let note = h?.note {
@@ -554,18 +555,22 @@ struct ModelsTab: View {
                 Text("Aggiungi la chiave API nel pannello “Chiavi API”.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            HStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 Text("Modello")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
                 modelPicker(m)
-                Spacer()
+                Spacer(minLength: 16)
                 Toggle("Partecipa di default", isOn: Binding(get: { m.default ?? false }, set: { model.setDefault(m, $0) }))
                     .toggleStyle(.checkbox)
                     .fixedSize()
                 Button("Rimuovi", role: .destructive) { model.remove(m) }
-                    .help("Togli \(m.label) dal consiglio")
+                    .help(String(format: L("Togli %@ dal consiglio"), m.label))
+                    .fixedSize()
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
         .contextMenu {
             Button("Rimuovi dal consiglio", role: .destructive) { model.remove(m) }
         }
@@ -598,7 +603,7 @@ struct ModelsTab: View {
     // MARK: Aggiungi una voce
 
     private var catalogSection: some View {
-        SettingsSection("Aggiungi una voce", footer: "I modelli “Gratis” non costano nulla: con “Mostra solo modelli gratuiti” attivo vedi solo quelli. “Consigliato” è una stima basata su versione, data e dimensione del modello; usa “Prova” per sapere se un modello risponde davvero con il tuo account.") {
+        SettingsSection(L("Aggiungi una voce"), footer: L("I modelli “Gratis” non costano nulla: con “Mostra solo modelli gratuiti” attivo vedi solo quelli. “Consigliato” è una stima basata su versione, data e dimensione del modello; usa “Prova” per sapere se un modello risponde davvero con il tuo account.")) {
             let withKey = model.providers.filter(\.hasKey)
             if withKey.isEmpty {
                 Label {
@@ -608,7 +613,7 @@ struct ModelsTab: View {
                 }
                 .foregroundStyle(.secondary)
             } else {
-                SettingsRow("Provider") {
+                SettingsRow(L("Provider")) {
                     Picker("Provider", selection: $model.provider) {
                         ForEach(withKey) { p in Text(p.name).tag(p.id) }
                     }
@@ -617,12 +622,12 @@ struct ModelsTab: View {
                     .onChange(of: model.provider) { _, _ in Task { await model.loadCatalog() } }
                 }
 
-                SettingsRow("Cerca") {
-                    NativeSearchField(text: $model.search, prompt: "Cerca una famiglia o un modello")
+                SettingsRow(L("Cerca")) {
+                    NativeSearchField(text: $model.search, prompt: L("Cerca una famiglia o un modello"))
                         .frame(width: 280)
                 }
 
-                SettingsRow("Mostra solo modelli gratuiti") {
+                SettingsRow(L("Mostra solo modelli gratuiti")) {
                     Toggle("Mostra solo modelli gratuiti", isOn: $model.onlyFree)
                         .labelsHidden()
                         .toggleStyle(.switch)
@@ -633,15 +638,15 @@ struct ModelsTab: View {
                 HStack(spacing: 8) {
                     if model.loadingCatalog {
                         ProgressView().controlSize(.small)
-                        Text("Carico i modelli di \(model.providerName(model.provider))…").foregroundStyle(.secondary)
+                        Text(String(format: L("Carico i modelli di %@…"), model.providerName(model.provider))).foregroundStyle(.secondary)
                     } else if let e = model.catalogError {
                         Label {
-                            Text("Catalogo non disponibile: \(e)").textSelection(.enabled)
+                            Text(String(format: L("Catalogo non disponibile: %@"), e)).textSelection(.enabled)
                         } icon: {
                             Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
                         }
                     } else {
-                        Text(families.count == 1 ? "1 famiglia" : "\(families.count) famiglie")
+                        Text(families.count == 1 ? L("1 famiglia") : String(format: L("%d famiglie"), families.count))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -668,15 +673,15 @@ struct ModelsTab: View {
 
     @ViewBuilder
     private func familyRow(_ f: ModelFamily) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(f.label).font(.headline).lineLimit(1)
                         familyCost(f)
                         if f.best.recommended { Badge(kind: .recommended) }
                     }
-                    Text("Migliore: \(f.best.name)")
+                    Text(String(format: L("Migliore: %@"), f.best.name))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
@@ -689,21 +694,21 @@ struct ModelsTab: View {
                     .foregroundStyle(.secondary).fixedSize()
                 } else {
                     Button("Aggiungi") { model.addFamily(f) }
-                        .help("Aggiungi \(f.label) come voce del consiglio")
+                        .help(String(format: L("Aggiungi %@ come voce del consiglio"), f.label))
                         .fixedSize()
                 }
             }
-            DisclosureGroup(f.items.count == 1 ? "Mostra il modello" : "Mostra i \(f.items.count) modelli",
+            DisclosureGroup(f.items.count == 1 ? L("Mostra il modello") : String(format: L("Mostra i %d modelli"), f.items.count),
                             isExpanded: Binding(
                 get: { expanded.contains("\(model.provider)/\(f.id)") },
                 set: { on in
                     let k = "\(model.provider)/\(f.id)"
                     if on { expanded.insert(k) } else { expanded.remove(k) }
                 })) {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach(f.items) { item in variantRow(item) }
                 }
-                .padding(.top, 4)
+                .padding(.top, 6)
             }
         }
     }
@@ -711,7 +716,7 @@ struct ModelsTab: View {
     @ViewBuilder
     private func variantRow(_ item: CatalogItem) -> some View {
         let key = model.probeKey(model.provider, item.id)
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(item.name).lineLimit(1)
@@ -734,12 +739,13 @@ struct ModelsTab: View {
             if model.probing.contains(key) {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Prova in corso").font(.caption).foregroundStyle(.secondary)
+                    Text("Prova in corso").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                 }
             } else {
                 Button("Prova") { model.probe(item) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .fixedSize()
                     .help("Manda una richiesta minima per vedere se risponde con il tuo account")
             }
         }

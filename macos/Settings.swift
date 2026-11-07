@@ -21,70 +21,70 @@ struct ProviderGuide: Identifiable {
 let providerGuides: [ProviderGuide] = [
     ProviderGuide(
         id: "gemini", name: "Google Gemini", free: true, optional: false,
-        unlocks: "Voce Gemini (Flash, Flash Lite e Gemma come riserve)",
-        summary: "Gratis, senza carta di credito.",
+        unlocks: L("Voce Gemini (Flash, Flash Lite e Gemma come riserve)"),
+        summary: L("Gratis, senza carta di credito."),
         url: URL(string: "https://aistudio.google.com/apikey")!,
         steps: [
-            "Apri Google AI Studio e accedi con il tuo account Google (accetta i termini, se li chiede).",
-            "Clicca “Create API key”; se lo chiede, scegli o crea un progetto.",
-            "Copia la chiave (inizia con “AIza”) e incollala nel campo qui sopra.",
+            L("Apri Google AI Studio e accedi con il tuo account Google (accetta i termini, se li chiede)."),
+            L("Clicca “Create API key”; se lo chiede, scegli o crea un progetto."),
+            L("Copia la chiave (inizia con “AIza”) e incollala nel campo qui sopra."),
         ],
-        note: "Quote gratuite basse: Gemini Flash circa 20 richieste al giorno (un dibattito ne usa 4), Flash Lite circa 500, Gemma circa 14.000. Finita una quota l'app passa da sola al modello successivo. Nel piano gratuito Google può usare i dati per migliorare i suoi modelli: non inserire informazioni riservate."),
+        note: L("Quote gratuite basse: Gemini Flash circa 20 richieste al giorno (un dibattito ne usa 4), Flash Lite circa 500, Gemma circa 14.000. Finita una quota l'app passa da sola al modello successivo. Nel piano gratuito Google può usare i dati per migliorare i suoi modelli: non inserire informazioni riservate.")),
     ProviderGuide(
         id: "groq", name: "Groq", free: true, optional: false,
-        unlocks: "Voci GPT-OSS e Qwen",
-        summary: "Gratis, senza carta di credito, molto veloce.",
+        unlocks: L("Voci GPT-OSS e Qwen"),
+        summary: L("Gratis, senza carta di credito, molto veloce."),
         url: URL(string: "https://console.groq.com/keys")!,
         steps: [
-            "Apri la console Groq e registrati (va bene anche l'account Google).",
-            "In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “AI Council”.",
-            "Copia subito la chiave (inizia con “gsk_”, Groq la mostra una sola volta) e incollala qui sopra.",
+            L("Apri la console Groq e registrati (va bene anche l'account Google)."),
+            L("In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “AI Council”."),
+            L("Copia subito la chiave (inizia con “gsk_”, Groq la mostra una sola volta) e incollala qui sopra."),
         ],
-        note: "Ha limiti al minuto: con molti modelli insieme l'app aspetta e riprova da sola."),
+        note: L("Ha limiti al minuto: con molti modelli insieme l'app aspetta e riprova da sola.")),
     ProviderGuide(
         id: "openrouter", name: "OpenRouter", free: true, optional: false,
-        unlocks: "Modelli gratuiti “:free” (per esempio Nemotron e DeepSeek)",
-        summary: "Gratis con i modelli “:free”, senza credito.",
+        unlocks: L("Modelli gratuiti “:free” (per esempio Nemotron e DeepSeek)"),
+        summary: L("Gratis con i modelli “:free”, senza credito."),
         url: URL(string: "https://openrouter.ai/settings/keys")!,
         steps: [
-            "Apri OpenRouter e registrati.",
-            "In “Keys” clicca “Create Key”; come limite di credito lascia 0 per non spendere mai nulla.",
-            "Copia la chiave (inizia con “sk-or-”) e incollala qui sopra.",
+            L("Apri OpenRouter e registrati."),
+            L("In “Keys” clicca “Create Key”; come limite di credito lascia 0 per non spendere mai nulla."),
+            L("Copia la chiave (inizia con “sk-or-”) e incollala qui sopra."),
         ],
-        note: "L'app usa solo i modelli gratuiti, quelli con “:free” nel nome. Senza credito le richieste al giorno sono poche e alcuni modelli sono lenti."),
+        note: L("L'app usa solo i modelli gratuiti, quelli con “:free” nel nome. Senza credito le richieste al giorno sono poche e alcuni modelli sono lenti.")),
     ProviderGuide(
         id: "mistral", name: "Mistral", free: true, optional: true,
-        unlocks: "Voce Mistral Small",
-        summary: "Gratis con limiti (piano “Experiment”).",
+        unlocks: L("Voce Mistral Small"),
+        summary: L("Gratis con limiti (piano “Experiment”)."),
         url: URL(string: "https://console.mistral.ai/api-keys")!,
         steps: [
-            "Apri la console Mistral e registrati.",
-            "Scegli il piano gratuito “Experiment” (chiede di verificare il numero di telefono).",
-            "In “API Keys” clicca “Create new key”, copia la chiave e incollala qui sopra.",
+            L("Apri la console Mistral e registrati."),
+            L("Scegli il piano gratuito “Experiment” (chiede di verificare il numero di telefono)."),
+            L("In “API Keys” clicca “Create new key”, copia la chiave e incollala qui sopra."),
         ],
-        note: "Utile come voce europea in più nel consiglio."),
+        note: L("Utile come voce europea in più nel consiglio.")),
     ProviderGuide(
         id: "cerebras", name: "Cerebras", free: true, optional: true,
-        unlocks: "GPT-OSS, Qwen, Llama e altri modelli open, molto veloci",
-        summary: "Gratis con limiti giornalieri.",
+        unlocks: L("GPT-OSS, Qwen, Llama e altri modelli open, molto veloci"),
+        summary: L("Gratis con limiti giornalieri."),
         url: URL(string: "https://cloud.cerebras.ai")!,
         steps: [
-            "Apri Cerebras Cloud e registrati.",
-            "In “API Keys” crea una nuova chiave e copiala (inizia con “csk-”).",
-            "Incollala qui sopra, poi scegli i modelli nel pannello “Modelli”.",
+            L("Apri Cerebras Cloud e registrati."),
+            L("In “API Keys” crea una nuova chiave e copiala (inizia con “csk-”)."),
+            L("Incollala qui sopra, poi scegli i modelli nel pannello “Modelli”."),
         ],
-        note: "Un'alternativa a Groq per gli stessi modelli open."),
+        note: L("Un'alternativa a Groq per gli stessi modelli open.")),
     ProviderGuide(
         id: "openai", name: "OpenAI", free: false, optional: true,
-        unlocks: "Modelli GPT ufficiali di OpenAI",
-        summary: "Solo a pagamento: l'abbonamento ChatGPT non include le API.",
+        unlocks: L("Modelli GPT ufficiali di OpenAI"),
+        summary: L("Solo a pagamento: l'abbonamento ChatGPT non include le API."),
         url: URL(string: "https://platform.openai.com/api-keys")!,
         steps: [
-            "Apri la piattaforma OpenAI e aggiungi credito in “Billing”.",
-            "In “API keys” clicca “Create new secret key”.",
-            "Copia la chiave (inizia con “sk-”) e incollala qui sopra.",
+            L("Apri la piattaforma OpenAI e aggiungi credito in “Billing”."),
+            L("In “API keys” clicca “Create new secret key”."),
+            L("Copia la chiave (inizia con “sk-”) e incollala qui sopra."),
         ],
-        note: "Per avere GPT gratis non serve questa chiave: GPT-OSS, il modello open di OpenAI, è disponibile gratis con Groq, Cerebras o OpenRouter."),
+        note: L("Per avere GPT gratis non serve questa chiave: GPT-OSS, il modello open di OpenAI, è disponibile gratis con Groq, Cerebras o OpenRouter.")),
 ]
 
 // MARK: - File .env
@@ -212,12 +212,12 @@ final class SettingsModel: ObservableObject {
                 if code == 200 {
                     tests[id] = await probeModels(id, p, key)
                 } else if code == 401 || code == 403 || code == 400 {
-                    tests[id] = .fail("Non funziona: chiave non valida (errore \(code)). Ricopiala per intero dalla pagina del provider.")
+                    tests[id] = .fail(String(format: L("Non funziona: chiave non valida (errore %d). Ricopiala per intero dalla pagina del provider."), code))
                 } else {
-                    tests[id] = .fail("Non funziona: il provider ha risposto con l'errore \(code). Riprova tra poco.")
+                    tests[id] = .fail(String(format: L("Non funziona: il provider ha risposto con l'errore %d. Riprova tra poco."), code))
                 }
             } catch {
-                tests[id] = .fail("Non funziona: connessione non riuscita (\(error.localizedDescription)).")
+                tests[id] = .fail(String(format: L("Non funziona: connessione non riuscita (%@)."), error.localizedDescription))
             }
         }
     }
@@ -248,15 +248,16 @@ final class SettingsModel: ObservableObject {
             else if codes.contains(where: { $0 == 429 || $0 >= 500 || $0 == 0 }) { busy.append(m.label) } // temporaneo
             else { gone.append(m.label) }                                                                 // 400/404: ritirato
         }
-        let ok = working.isEmpty ? "" : " Rispondono: \(working.joined(separator: ", "))."
+        let list = { (names: [String]) in names.joined(separator: ", ") }
+        let ok = working.isEmpty ? [] : [String(format: L("Rispondono: %@."), list(working))]
         if !gone.isEmpty {
             // Nessuna azione richiesta all'utente: al riavvio il motore li sostituisce e salva la scelta.
-            return .warn("La chiave funziona.\(ok) Ritirati dal provider: \(gone.joined(separator: ", ")); l'app li sostituisce da sola con i migliori disponibili (li trovi nel pannello Modelli).")
+            return .warn(([L("La chiave funziona.")] + ok + [String(format: L("Ritirati dal provider: %@; l'app li sostituisce da sola con i migliori disponibili (li trovi nel pannello Modelli)."), list(gone))]).joined(separator: " "))
         }
         if !busy.isEmpty {
-            return .warn("La chiave funziona.\(ok) Occupati in questo momento: \(busy.joined(separator: ", ")); durante il dibattito l'app riprova da sola.")
+            return .warn(([L("La chiave funziona.")] + ok + [String(format: L("Occupati in questo momento: %@; durante il dibattito l'app riprova da sola."), list(busy))]).joined(separator: " "))
         }
-        return .ok(working.isEmpty ? "Funziona: la chiave è valida." : "Funziona: rispondono \(working.joined(separator: ", ")).")
+        return .ok(working.isEmpty ? L("Funziona: la chiave è valida.") : String(format: L("Funziona: rispondono %@."), list(working)))
     }
 
     func save() throws {
@@ -319,7 +320,7 @@ struct SettingsPage<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 32) {
                 Text(title)
                     .font(.title2.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
@@ -355,12 +356,13 @@ struct SettingsSection<Accessory: View, Content: View>: View {
                 Text(title).font(.headline).accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
                 accessory.font(.callout).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize()
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, 6)
             Group(subviews: content) { rows in
                 ForEach(rows) { row in
                     row
-                        .padding(.vertical, 10)
+                        .padding(.vertical, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if row.id != rows.last?.id { SettingsHairline() }
                 }
@@ -369,7 +371,7 @@ struct SettingsSection<Accessory: View, Content: View>: View {
                 Text(footer)
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 6)
+                    .padding(.top, 8)
             }
         }
     }
@@ -395,15 +397,22 @@ struct SettingsRow<Control: View>: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
+            VStack(alignment: .leading, spacing: 3) {
+                if detail == nil {
+                    // Etichetta breve: sempre su una riga, mai spezzata a metà parola.
+                    Text(label).lineLimit(1).fixedSize()
+                } else {
+                    Text(label).fixedSize(horizontal: false, vertical: true)
+                }
                 if let detail {
                     Text(detail)
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 12)
+            .frame(minWidth: 140, alignment: .leading)
+            .layoutPriority(1)
+            Spacer(minLength: 16)
             control
         }
     }
@@ -429,20 +438,31 @@ struct SettingsBar<Content: View>: View {
 
 struct GeneralPage: View {
     @State private var appearance = AppAppearance.current
+    @State private var language = AppLanguage.current
+    @AppStorage(AppFont.key) private var font = AppFont.system.rawValue
+    @State private var openAtLogin = LoginItem.enabled || LoginItem.needsApproval
+    @State private var loginError: String?
+    @State private var menuBar = MenuBarPreference.enabled
 
     private var appearanceDetail: String {
         switch appearance {
-        case .system: return "Sistema: segue l'aspetto scelto in macOS."
-        case .light: return "Chiaro: sempre chiaro, anche se macOS è scuro."
-        case .dark: return "Scuro: sempre scuro, anche se macOS è chiaro."
+        case .system: return L("Sistema: segue l'aspetto scelto in macOS.")
+        case .light: return L("Chiaro: sempre chiaro, anche se macOS è scuro.")
+        case .dark: return L("Scuro: sempre scuro, anche se macOS è chiaro.")
         }
     }
 
+    private var loginDetail: String {
+        if let loginError { return loginError }
+        if LoginItem.needsApproval { return L("Da approvare in Impostazioni di Sistema ▸ Generali ▸ Elementi di login.") }
+        return L("AI Council si apre da solo quando accedi al Mac.")
+    }
+
     var body: some View {
-        SettingsPage("Generale") {
-            SettingsSection("Aspetto") {
-                SettingsRow("Tema", detail: appearanceDetail) {
-                    Picker("Tema", selection: $appearance) {
+        SettingsPage(L("Generale")) {
+            SettingsSection(L("Aspetto")) {
+                SettingsRow(L("Tema"), detail: appearanceDetail) {
+                    Picker(L("Tema"), selection: $appearance) {
                         ForEach(AppAppearance.allCases) { a in
                             Label(a.title, systemImage: a.symbol)
                                 .labelStyle(.iconOnly)
@@ -453,11 +473,61 @@ struct GeneralPage: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(width: 132)
-                    .help("Tema: \(appearance.title)")
+                    .help(L("Tema") + ": " + appearance.title)
+                }
+                SettingsRow(L("Carattere"), detail: L("Carattere del testo dell'interfaccia e delle risposte.")) {
+                    Picker(L("Carattere"), selection: $font) {
+                        ForEach(AppFont.allCases) { f in
+                            Text(f.title).fontDesign(f.design).tag(f.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            SettingsSection(L("Lingua")) {
+                SettingsRow(L("Lingua dell'interfaccia"),
+                            detail: L("Le risposte dei modelli seguono sempre la lingua della domanda.")) {
+                    Picker(L("Lingua dell'interfaccia"), selection: $language) {
+                        ForEach(AppLanguage.allCases) { l in Text(l.title).tag(l) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                if language != AppLanguage.launched {
+                    SettingsRow(L("La nuova lingua si applica al riavvio di AI Council.")) {
+                        Button(L("Riavvia ora")) { AppLanguage.relaunch() }
+                    }
+                }
+            }
+            SettingsSection(L("Avvio e barra dei menu")) {
+                SettingsRow(L("Apri all'accesso"), detail: loginDetail) {
+                    Toggle(L("Apri all'accesso"), isOn: $openAtLogin)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                SettingsRow(L("Mostra nella barra dei menu"),
+                            detail: L("Icona di AI Council in alto a destra: nuova discussione, discussioni recenti e finestra principale. Chiudendo la finestra l'app resta attiva.")) {
+                    Toggle(L("Mostra nella barra dei menu"), isOn: $menuBar)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
                 }
             }
         }
         .onChange(of: appearance) { _, a in AppAppearance.apply(a) }
+        .onChange(of: language) { _, l in AppLanguage.save(l) }
+        .onChange(of: menuBar) { _, on in MenuBarPreference.set(on) }
+        .onChange(of: openAtLogin) { _, on in
+            // "Da approvare" conta come attivo: spegnendo l'interruttore si annulla la registrazione.
+            guard on != (LoginItem.enabled || LoginItem.needsApproval) else { return }
+            do {
+                try LoginItem.set(on)
+                loginError = nil
+            } catch {
+                loginError = L("Non è stato possibile cambiare l'apertura all'accesso:") + " " + error.localizedDescription
+                openAtLogin = LoginItem.enabled || LoginItem.needsApproval
+            }
+        }
     }
 }
 
@@ -481,22 +551,22 @@ struct ProviderSection: View {
     /// Stato a parole accanto al titolo della sezione.
     private var statusText: String {
         switch test {
-        case .ok: return "Funziona"
-        case .warn: return "Funziona, con avvisi"
-        case .fail: return "Non funziona"
-        case .testing: return "Verifica in corso"
-        case .idle: return model.hasKey(guide.id) ? "Chiave inserita" : "Nessuna chiave"
+        case .ok: return L("Funziona")
+        case .warn: return L("Funziona, con avvisi")
+        case .fail: return L("Non funziona")
+        case .testing: return L("Verifica in corso")
+        case .idle: return model.hasKey(guide.id) ? L("Chiave inserita") : L("Nessuna chiave")
         }
     }
 
     var body: some View {
-        SettingsSection(guide.name, footer: "\(guide.unlocks). \(guide.summary)") {
+        SettingsSection(guide.name, footer: guide.unlocks + ". " + guide.summary) {
             HStack(spacing: 8) {
                 Badge.cost(guide.free)
                 Text(statusText)
             }
         } content: {
-            SettingsRow("Chiave API") {
+            SettingsRow(L("Chiave API")) {
                 HStack(spacing: 8) {
                     Group {
                         if showKey {
@@ -509,9 +579,11 @@ struct ProviderSection: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.body.monospaced())
                     .frame(minWidth: 200, maxWidth: 260)
-                    Button(showKey ? "Nascondi" : "Mostra") { showKey.toggle() }
-                        .help(showKey ? "Nascondi la chiave" : "Mostra la chiave per controllarla")
+                    Button(showKey ? L("Nascondi") : L("Mostra")) { showKey.toggle() }
+                        .help(showKey ? L("Nascondi la chiave") : L("Mostra la chiave per controllarla"))
+                        .fixedSize()
                     Button("Verifica") { model.test(guide.id) }
+                        .fixedSize()
                         .help("Prova la chiave con una richiesta vera ai modelli del consiglio")
                         .disabled(!model.hasKey(guide.id) || test == .testing)
                 }
@@ -520,10 +592,10 @@ struct ProviderSection: View {
             if test != .idle { TestResultView(state: test) }
 
             DisclosureGroup("Come ottenere la chiave", isExpanded: $guideOpen) {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(guide.steps.enumerated()), id: \.offset) { i, step in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text("\(i + 1).").monospacedDigit().foregroundStyle(.secondary)
+                            Text(verbatim: "\(i + 1).").monospacedDigit().foregroundStyle(.secondary)
                             Text(step).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -531,10 +603,10 @@ struct ProviderSection: View {
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Link(destination: guide.url) {
-                        Label("Apri la pagina delle chiavi di \(guide.name)", systemImage: "arrow.up.right.square")
+                        Label(String(format: L("Apri la pagina delle chiavi di %@"), guide.name), systemImage: "arrow.up.right.square")
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
             }
         }
     }
@@ -552,7 +624,7 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsPage("Chiavi API") {
+            SettingsPage(L("Chiavi API")) {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: "gift")
                         .font(.title2)
@@ -574,8 +646,8 @@ struct SettingsView: View {
                 ForEach(main) { g in ProviderSection(guide: g, model: model) }
 
                 if !others.isEmpty {
-                    SettingsSection("Altri provider", footer: "Facoltativi: servono solo se vuoi altre voci. OpenAI è l'unico a pagamento.") {
-                        SettingsRow("Mostra altri provider", detail: others.map(\.name).joined(separator: ", ")) {
+                    SettingsSection(L("Altri provider"), footer: L("Facoltativi: servono solo se vuoi altre voci. OpenAI è l'unico a pagamento.")) {
+                        SettingsRow(L("Mostra altri provider"), detail: others.map(\.name).joined(separator: ", ")) {
                             Toggle("Mostra altri provider", isOn: $showOthers)
                                 .labelsHidden()
                                 .toggleStyle(.switch)
@@ -593,7 +665,7 @@ struct SettingsView: View {
             }
 
             SettingsBar {
-                Text("\(model.configuredCount) di \(model.providers.count) provider configurati")
+                Text(String(format: L("%d di %d provider configurati"), model.configuredCount, model.providers.count))
                     .foregroundStyle(.secondary)
                 if let error {
                     Text(error).foregroundStyle(.red).lineLimit(1).textSelection(.enabled)
@@ -618,18 +690,18 @@ let projectURL = URL(string: "https://github.com/peppolone/ai-council")!
 struct AboutPage: View {
     private var version: String {
         let info = Bundle.main.infoDictionary
-        guard let v = info?["CFBundleShortVersionString"] as? String else { return "di sviluppo" }
+        guard let v = info?["CFBundleShortVersionString"] as? String else { return L("di sviluppo") }
         if let b = info?["CFBundleVersion"] as? String, b != v { return "\(v) (\(b))" }
         return v
     }
 
     var body: some View {
-        SettingsPage("Informazioni") {
+        SettingsPage(L("Informazioni")) {
             HStack(spacing: 16) {
                 CouncilLogo(size: 64)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("AI Council").font(.title3.weight(.semibold))
-                    Text("Versione \(version)").foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(String(format: L("Versione %@"), version)).foregroundStyle(.secondary).textSelection(.enabled)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -638,13 +710,13 @@ struct AboutPage: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            SettingsSection("Collegamenti") {
-                SettingsRow("Progetto", detail: "Codice sorgente e novità") {
+            SettingsSection(L("Collegamenti")) {
+                SettingsRow(L("Progetto"), detail: L("Codice sorgente e novità")) {
                     Link(destination: projectURL) {
                         Label("Apri su GitHub", systemImage: "arrow.up.right.square")
                     }
                 }
-                SettingsRow("Cartella dati", detail: "Chiavi, scelta dei modelli e cronologia delle discussioni") {
+                SettingsRow(L("Cartella dati"), detail: L("Chiavi, scelta dei modelli e cronologia delle discussioni")) {
                     Button("Mostra nel Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([Paths.dataDir])
                     }
@@ -662,10 +734,10 @@ enum SettingsTab: Int, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: "Generale"
-        case .keys: "Chiavi API"
-        case .models: "Modelli"
-        case .about: "Informazioni"
+        case .general: L("Generale")
+        case .keys: L("Chiavi API")
+        case .models: L("Modelli")
+        case .about: L("Informazioni")
         }
     }
 
@@ -681,23 +753,23 @@ enum SettingsTab: Int, CaseIterable, Identifiable {
     /// Parole che la ricerca della barra laterale riconosce.
     var keywords: String {
         switch self {
-        case .general: "aspetto tema chiaro scuro sistema"
-        case .keys: "chiave chiavi api provider gemini groq openrouter mistral cerebras openai gratis"
-        case .models: "voci consiglio catalogo claude famiglia prova riserva automatico"
-        case .about: "versione progetto github cartella dati"
+        case .general: L("aspetto tema chiaro scuro sistema carattere font lingua language accesso login avvio barra dei menu")
+        case .keys: L("chiave chiavi api provider gemini groq openrouter mistral cerebras openai gratis")
+        case .models: L("voci consiglio catalogo claude famiglia prova riserva automatico")
+        case .about: L("versione progetto github cartella dati")
         }
     }
 
     func matches(_ query: String) -> Bool {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return q.isEmpty || title.lowercased().contains(q) || keywords.contains(q)
+        return q.isEmpty || title.lowercased().contains(q) || keywords.lowercased().contains(q)
     }
 }
 
 /// Gruppi della barra laterale, nell'ordine in cui compaiono.
 private let settingsGroups: [(title: String, tabs: [SettingsTab])] = [
-    ("Preferenze", [.general]),
-    ("Consiglio", [.keys, .models]),
+    (L("Preferenze"), [.general]),
+    (L("Consiglio"), [.keys, .models]),
     ("AI Council", [.about]),
 ]
 
@@ -720,7 +792,7 @@ struct SettingsSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NativeSearchField(text: $query, prompt: "Cerca")
+            NativeSearchField(text: $query, prompt: L("Cerca"))
                 .padding(.horizontal, 10)
                 .padding(.top, 4)
                 .padding(.bottom, 6)
@@ -730,7 +802,15 @@ struct SettingsSidebar: View {
                     if !tabs.isEmpty {
                         Section(group.title) {
                             ForEach(tabs) { t in
-                                Label(t.title, systemImage: t.symbol).tag(t)
+                                Label(t.title, systemImage: t.symbol)
+                                    .tag(t)
+                                    .listItemTint(.fixed(Brand.accent))
+                                    .listRowBackground(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(nav.tab == t ? Brand.selection : .clear)
+                                            .padding(.horizontal, 10)
+                                    )
+                                    .background(SystemHighlightRemover())
                             }
                         }
                     }
@@ -740,6 +820,7 @@ struct SettingsSidebar: View {
                 }
             }
             .listStyle(.sidebar)
+            .tint(Brand.accent)
         }
     }
 }
@@ -785,8 +866,8 @@ final class SettingsWindowController {
     private func makeWindow() -> NSWindow {
         let close: () -> Void = { [weak self] in self?.window?.close() }
 
-        let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav))
-        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close))
+        let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav).appFont())
+        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close).appFont())
         // La finestra ha dimensione fissa: il contenuto SwiftUI non deve ridimensionarla.
         sidebarVC.sizingOptions = []
         detailVC.sizingOptions = []
@@ -806,7 +887,7 @@ final class SettingsWindowController {
         let w = NSWindow(contentRect: NSRect(origin: .zero, size: settingsWindowSize),
                          styleMask: [.titled, .closable, .fullSizeContentView],
                          backing: .buffered, defer: false)
-        w.title = "Impostazioni"
+        w.title = L("Impostazioni")
         // Sfondo di marchio sotto tutta la finestra, come nella finestra principale.
         let root = NSViewController()
         root.view = NSView()

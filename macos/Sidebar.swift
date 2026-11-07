@@ -99,7 +99,7 @@ final class SidebarModel: ObservableObject {
 
     private static let monthFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = AppLanguage.locale
         f.dateFormat = "LLLL yyyy"
         return f
     }()
@@ -115,11 +115,11 @@ final class SidebarModel: ObservableObject {
             let date = Self.date(d.created_at) ?? .distantPast
             let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? .max
             let title: String
-            if days <= 0 { title = "Oggi" }
-            else if days == 1 { title = "Ieri" }
-            else if days < 7 { title = "Ultimi 7 giorni" }
-            else if days < 30 { title = "Ultimi 30 giorni" }
-            else if date == .distantPast { title = "Precedenti" }
+            if days <= 0 { title = L("Oggi") }
+            else if days == 1 { title = L("Ieri") }
+            else if days < 7 { title = L("Ultimi 7 giorni") }
+            else if days < 30 { title = L("Ultimi 30 giorni") }
+            else if date == .distantPast { title = L("Precedenti") }
             else { title = Self.monthFormatter.string(from: date) }
             if map[title] == nil { order.append(title) }
             map[title, default: []].append(d)
@@ -136,11 +136,11 @@ struct SidebarSearchField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSSearchField {
         let f = NSSearchField()
-        f.placeholderString = "Cerca nelle discussioni"
+        f.placeholderString = L("Cerca nelle discussioni")
         f.sendsSearchStringImmediately = true
         f.target = context.coordinator
         f.action = #selector(Coordinator.changed(_:))
-        f.setAccessibilityLabel("Cerca nelle discussioni")
+        f.setAccessibilityLabel(L("Cerca nelle discussioni"))
         model.searchField = f
         return f
     }
@@ -168,8 +168,8 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 6) {
-                SidebarActionRow(title: "Nuova discussione", systemImage: "square.and.pencil",
-                                 help: "Inizia una nuova discussione (⌘N)") { model.onNew?() }
+                SidebarActionRow(title: L("Nuova discussione"), systemImage: "square.and.pencil",
+                                 help: L("Inizia una nuova discussione (⌘N)")) { model.onNew?() }
                 SidebarSearchField(model: model)
             }
             .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
@@ -184,8 +184,15 @@ struct SidebarView: View {
                 ForEach(model.groups, id: \.title) { group in
                     Section(group.title) {
                         ForEach(group.items) { d in
-                            DebateRow(debate: d) { model.requestDelete(d.id) }
+                            DebateRow(debate: d, selected: model.selected == d.id) { model.requestDelete(d.id) }
                                 .tag(d.id)
+                                // Selezione nel colore del marchio al posto dell'accento di sistema.
+                                .listRowBackground(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(model.selected == d.id ? Brand.selection : .clear)
+                                        .padding(.horizontal, 10)
+                                )
+                                .background(SystemHighlightRemover())
                                 // Solo le azioni più probabili, distruttive in fondo, niente scorciatoie.
                                 .contextMenu {
                                     if d.status == "done" {
@@ -199,6 +206,7 @@ struct SidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .tint(Brand.accent)
             .overlay {
                 if model.loaded && model.items.isEmpty {
                     if model.query.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -247,9 +255,9 @@ struct SidebarView: View {
     }
 
     private var deleteTitle: String {
-        guard let q = model.pendingDelete?.question else { return "Eliminare la discussione?" }
+        guard let q = model.pendingDelete?.question else { return L("Eliminare la discussione?") }
         let short = q.count > 60 ? String(q.prefix(60)) + "…" : q
-        return "Eliminare la discussione «\(short)»?"
+        return String(format: L("Eliminare la discussione «%@»?"), short)
     }
 }
 
@@ -286,19 +294,20 @@ struct SidebarActionRow: View {
 /// Al passaggio del mouse l'ora lascia il posto al pulsante ✕ (scorciatoia, non l'unico modo).
 struct DebateRow: View {
     let debate: DebateSummary
+    var selected = false
     let onDelete: () -> Void
     @State private var hovering = false
 
     private static let time: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = AppLanguage.locale
         f.dateFormat = "HH:mm"
         return f
     }()
 
     private static let day: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = AppLanguage.locale
         f.dateFormat = "d MMM"
         return f
     }()
@@ -315,13 +324,13 @@ struct DebateRow: View {
     private var detail: String {
         var parts: [String] = []
         switch debate.status {
-        case "running": parts.append("In corso")
-        case "failed": parts.append("Non riuscito")
-        case "cancelled": parts.append("Annullato")
-        case "interrupted": parts.append("Interrotto")
+        case "running": parts.append(L("In corso"))
+        case "failed": parts.append(L("Non riuscito"))
+        case "cancelled": parts.append(L("Annullato"))
+        case "interrupted": parts.append(L("Interrotto"))
         default: break
         }
-        if debate.parent_id != nil { parts.append("Approfondimento") }
+        if debate.parent_id != nil { parts.append(L("Approfondimento")) }
         return parts.joined(separator: " · ")
     }
 
@@ -329,8 +338,11 @@ struct DebateRow: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(debate.question)
+                    .fontWeight(selected ? .medium : .regular)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(0)
                 ZStack(alignment: .trailing) {
                     if debate.status == "running" {
                         ProgressView().controlSize(.mini)
@@ -355,6 +367,7 @@ struct DebateRow: View {
                     .opacity(hovering ? 1 : 0)
                 }
                 .fixedSize()
+                .layoutPriority(1)
             }
             if !detail.isEmpty {
                 Text(detail)
@@ -367,5 +380,21 @@ struct DebateRow: View {
         .contentShape(Rectangle())
         .help(debate.question)
         .onHover { hovering = $0 }
+    }
+}
+
+/// Toglie l'evidenziazione di sistema (accento blu) dalla tabella che contiene la riga:
+/// la selezione resta funzionante (frecce, ⌫) ma la disegna la riga nel colore del marchio.
+struct SystemHighlightRemover: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Finder() }
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    final class Finder: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            var v: NSView? = superview
+            while let cur = v, !(cur is NSTableView) { v = cur.superview }
+            if let t = v as? NSTableView, t.selectionHighlightStyle != .none { t.selectionHighlightStyle = .none }
+        }
     }
 }
