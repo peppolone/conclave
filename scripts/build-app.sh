@@ -3,14 +3,15 @@
 # Uso: npm run app            (solo build)
 #      npm run app:install    (build + copia in /Applications)
 # Variabili per le versioni distribuite (vedi .github/workflows/release.yml):
-#   ARCH=arm64|x86_64   architettura dell'eseguibile (predefinita: quella di questo Mac)
+#   ARCHS="arm64 x86_64" architetture dell'eseguibile, più di una = app universale
+#                       (predefinita: quella di questo Mac)
 #   VERSION=1.2.3       versione dell'app (predefinita: quella di package.json)
-#   NODE_BIN=<file>     binario di Node da includere nell'app (scripts/fetch-node.sh)
+#   NODE_BIN=<file>      binario di Node da includere, con le stesse architetture (scripts/fetch-node.sh)
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
 APP="$ROOT/dist/Conclave.app"
-ARCH="${ARCH:-$(uname -m)}"
+ARCHS=(${=ARCHS:-$(uname -m)})
 VERSION="${VERSION:-$(node -p 'require(process.argv[1]).version' "$ROOT/package.json")}"
 BUILD="${BUILD_NUMBER:-1}"
 TMP="$(mktemp -d)"
@@ -20,16 +21,22 @@ echo "→ Pulizia"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/server"
 
-echo "→ Compilazione Swift ($ARCH)"
+echo "→ Compilazione Swift (${ARCHS[*]})"
 # Tutti i file Swift dell'app (render-icon.swift è uno strumento di build a parte).
 SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift | grep -v render-icon.swift)}")
-xcrun swiftc -O -target "$ARCH-apple-macos26.0" "${SOURCES[@]}" -o "$APP/Contents/MacOS/Conclave" \
-  -framework AppKit
+SLICES=()
+for a in "${ARCHS[@]}"; do
+  xcrun swiftc -O -target "$a-apple-macos26.0" "${SOURCES[@]}" -o "$TMP/Conclave-$a" -framework AppKit
+  SLICES+=("$TMP/Conclave-$a")
+done
+lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/Conclave"
 
 if [[ -n "${NODE_BIN:-}" ]]; then
   echo "→ Node incluso"
   cp "$NODE_BIN" "$APP/Contents/MacOS/node"
-  [[ "$(lipo -archs "$APP/Contents/MacOS/node")" == *"$ARCH"* ]] || { echo "Node non è $ARCH"; exit 1; }
+  for a in "${ARCHS[@]}"; do
+    [[ " $(lipo -archs "$APP/Contents/MacOS/node") " == *" $a "* ]] || { echo "Node senza $a"; exit 1; }
+  done
 fi
 
 echo "→ Lingue dell'interfaccia"
