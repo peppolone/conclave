@@ -1,5 +1,5 @@
 // Barra laterale nativa (NSSplitViewController → Liquid Glass su macOS 26):
-// in cima "Nuova discussione" e la ricerca, poi la cronologia per data,
+// in cima "Nuova discussione", poi la cronologia per data (filtrata dal campo di ricerca della toolbar),
 // in fondo una barra fissa con il marchio e il pulsante Impostazioni.
 
 import AppKit
@@ -19,8 +19,6 @@ struct DebateSummary: Decodable, Identifiable, Equatable {
 final class SidebarModel: ObservableObject {
     @Published var items: [DebateSummary] = []
     @Published var query = ""
-    /// Campo di ricerca mostrato in cima alla barra laterale (si apre dalla lente nella toolbar o con ⌘F).
-    @Published var searchVisible = false
     @Published var selected: Int?
     /// Discussione per cui è aperta la conferma di eliminazione.
     @Published var pendingDelete: DebateSummary?
@@ -33,8 +31,9 @@ final class SidebarModel: ObservableObject {
     var onExport: ((Int) -> Void)?
     var onNew: (() -> Void)?
     var onSettings: (() -> Void)?
-    /// Campo di ricerca nativo, per portarci il fuoco con ⌘F.
-    weak var searchField: NSSearchField?
+    /// Campo di ricerca nativo della toolbar, per portarci il fuoco con ⌘F.
+    private weak var searchItem: NSSearchToolbarItem?
+    private var searchDelegate: SearchFieldDelegate?
     private var searchTask: Task<Void, Never>?
 
     init(port: @escaping () -> Int) { self.port = port }
@@ -75,25 +74,35 @@ final class SidebarModel: ObservableObject {
         pendingDelete = d
     }
 
-    /// Mostra il campo di ricerca e ci porta il fuoco (il campo nasce al giro successivo).
-    func focusSearch() {
-        searchVisible = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(60))
-            guard let f = searchField else { return }
-            f.window?.makeFirstResponder(f)
-        }
+    /// Collega il campo di ricerca della toolbar: digitando la lista si filtra.
+    func attach(_ item: NSSearchToolbarItem) {
+        let d = SearchFieldDelegate(model: self)
+        item.searchField.placeholderString = L("Cerca nelle discussioni")
+        item.searchField.setAccessibilityLabel(L("Cerca nelle discussioni"))
+        item.searchField.sendsSearchStringImmediately = true
+        item.searchField.stringValue = query  // un campo rimesso nella toolbar mostra il filtro attivo
+        item.searchField.target = d
+        item.searchField.action = #selector(SearchFieldDelegate.changed(_:))
+        item.searchField.delegate = d
+        searchItem = item
+        searchDelegate = d
     }
 
-    /// Lente della toolbar: apre la ricerca, o la richiude se è aperta e vuota.
-    func toggleSearch() {
-        if searchVisible && query.isEmpty { searchVisible = false } else { focusSearch() }
+    /// Il campo è stato tolto dalla toolbar: la lista non deve restare filtrata senza un campo per svuotarla.
+    func detachSearch(_ item: NSToolbarItem) {
+        guard item === searchItem else { return }  // spostato: il nuovo campo è già collegato
+        searchItem = nil
+        searchDelegate = nil
+        guard !query.isEmpty else { return }
+        query = ""
+        reload()
     }
 
-    /// Chiude la ricerca solo se non c'è niente di scritto (la lista resta filtrata finché c'è testo).
-    func closeSearchIfEmpty() {
-        if query.trimmingCharacters(in: .whitespaces).isEmpty { searchVisible = false }
-    }
+    /// ⌘F: fuoco nel campo di ricerca della toolbar.
+    func focusSearch() { searchItem?.beginSearchInteraction() }
+
+    /// Esc a campo vuoto: toglie il fuoco dal campo (con del testo Esc lo svuota, come di sistema).
+    fileprivate func endSearch() { searchItem?.endSearchInteraction() }
 
     func delete(_ id: Int) {
         Task {
@@ -147,47 +156,22 @@ final class SidebarModel: ObservableObject {
     }
 }
 
-/// Campo di ricerca di sistema (NSSearchField): lente, pulsante di cancellazione, Esc per svuotare.
-struct SidebarSearchField: NSViewRepresentable {
-    @ObservedObject var model: SidebarModel
+/// Delegato del campo di ricerca della toolbar (NSSearchToolbarItem).
+@MainActor
+final class SearchFieldDelegate: NSObject, NSSearchFieldDelegate {
+    private unowned let model: SidebarModel
+    init(model: SidebarModel) { self.model = model }
 
-    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let f = NSSearchField()
-        f.placeholderString = L("Cerca nelle discussioni")
-        f.sendsSearchStringImmediately = true
-        f.target = context.coordinator
-        f.action = #selector(Coordinator.changed(_:))
-        f.setAccessibilityLabel(L("Cerca nelle discussioni"))
-        f.delegate = context.coordinator
-        model.searchField = f
-        return f
+    @objc func changed(_ sender: NSSearchField) {
+        guard sender.stringValue != model.query else { return }
+        model.query = sender.stringValue
+        model.queryChanged()
     }
 
-    func updateNSView(_ f: NSSearchField, context: Context) {
-        if f.stringValue != model.query { f.stringValue = model.query }
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        let model: SidebarModel
-        init(model: SidebarModel) { self.model = model }
-
-        @objc func changed(_ sender: NSSearchField) {
-            guard sender.stringValue != model.query else { return }
-            model.query = sender.stringValue
-            model.queryChanged()
-        }
-
-        // Esc con il campo vuoto chiude la ricerca (con del testo lo svuota, come di sistema).
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-            guard sel == #selector(NSResponder.cancelOperation(_:)), model.query.isEmpty else { return false }
-            model.searchVisible = false
-            return true
-        }
-
-        func controlTextDidEndEditing(_ obj: Notification) { model.closeSearchIfEmpty() }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        guard sel == #selector(NSResponder.cancelOperation(_:)), model.query.isEmpty else { return false }
+        model.endSearch()
+        return true
     }
 }
 
@@ -196,16 +180,9 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 6) {
-                SidebarActionRow(title: L("Nuova discussione"), systemImage: "square.and.pencil",
-                                 help: L("Inizia una nuova discussione (⌘N)")) { model.onNew?() }
-                if model.searchVisible || !model.query.isEmpty {
-                    SidebarSearchField(model: model)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-            .animation(.easeOut(duration: 0.15), value: model.searchVisible)
-            .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
+            SidebarActionRow(title: L("Nuova discussione"), systemImage: "square.and.pencil",
+                             help: L("Inizia una nuova discussione (⌘N)")) { model.onNew?() }
+                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
 
             List(selection: Binding(get: { model.selected }, set: { id in
                 // La lista riassegna la stessa selezione quando si aggiorna: va aperta solo

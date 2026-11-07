@@ -332,7 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         }
         window.contentViewController = windowRoot
         // Toolbar unificata: i pulsanti fluttuano su Liquid Glass sopra il contenuto.
-        let toolbar = NSToolbar(identifier: "MainToolbar")
+        // Identificatore nuovo quando cambia la disposizione predefinita: quella salvata non vale più.
+        let toolbar = NSToolbar(identifier: "MainToolbar2")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         // Impostazioni non è di default (HIG): si può aggiungere da Vista ▸ Personalizza la barra strumenti.
@@ -608,12 +609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     @objc func findDiscussions(_ sender: Any?) {
         revealSidebar()
         window.makeKeyAndOrderFront(nil)
+        if window.toolbar?.isVisible == false { window.toggleToolbarShown(nil) }
         sidebar.focusSearch()
-    }
-
-    @objc func toggleSearch(_ sender: Any?) {
-        revealSidebar()
-        sidebar.toggleSearch()
     }
 
     @objc func deleteDiscussion(_ sender: Any?) {
@@ -687,15 +684,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     // MARK: Toolbar
 
+    func toolbarDidRemoveItem(_ notification: Notification) {
+        if let item = notification.userInfo?["item"] as? NSToolbarItem, item.itemIdentifier == Self.searchItem { sidebar.detachSearch(item) }
+    }
+
     private static let searchItem = NSToolbarItem.Identifier("searchDebates")
     private static let newItem = NSToolbarItem.Identifier("newDebate")
     private static let settingsItem = NSToolbarItem.Identifier("settings")
     private static let copyItem = NSToolbarItem.Identifier("copyVerdict")
     private static let exportItem = NSToolbarItem.Identifier("export")
 
-    // Due gruppi a destra: azioni della discussione, spazio fisso, "Nuova discussione".
+    // A destra: azioni della discussione, spazio fisso, "Nuova discussione" e in fondo la ricerca
+    // (come in Note e Mail: sopra la barra laterale non c'è posto per un campo intero).
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.searchItem, .sidebarTrackingSeparator, .flexibleSpace, Self.copyItem, Self.exportItem, .space, Self.newItem]
+        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.copyItem, Self.exportItem, .space, Self.newItem, Self.searchItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -704,6 +706,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        // Campo di ricerca di sistema: filtra la cronologia della barra laterale mentre si scrive.
+        if id == Self.searchItem {
+            let search = NSSearchToolbarItem(itemIdentifier: id)
+            search.label = L("Cerca")
+            search.paletteLabel = L("Cerca nelle discussioni")
+            search.toolTip = L("Cerca nelle discussioni (⌘F)")
+            if flag { sidebar.attach(search) }
+            return search
+        }
         let item = NSToolbarItem(itemIdentifier: id)
         // Pulsanti-icona con tooltip; label e paletteLabel per VoiceOver, menu di overflow e Personalizza.
         func symbol(_ name: String, _ description: String) {
@@ -711,12 +722,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             item.isBordered = true
         }
         switch id {
-        case Self.searchItem:
-            item.label = L("Cerca")
-            item.paletteLabel = L("Cerca nelle discussioni")
-            item.toolTip = L("Cerca nelle discussioni (⌘F)")
-            symbol("magnifyingglass", L("Cerca nelle discussioni"))
-            item.action = #selector(toggleSearch(_:))
         case Self.newItem:
             item.label = L("Nuova discussione")
             item.toolTip = L("Nuova discussione (⌘N)")
