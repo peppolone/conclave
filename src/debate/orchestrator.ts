@@ -30,7 +30,7 @@ export type DebateEvent =
   | { type: "phase"; phase: Phase; note?: string }
   | { type: "message"; phase: Phase; modelId: string; text: string; ms: number; model?: string; replaced?: string }
   | { type: "error"; phase: Phase; modelId: string; error: string }
-  | { type: "done"; status: "done" | "failed" | "cancelled"; verdict?: string; error?: string };
+  | { type: "done"; status: "done" | "failed" | "cancelled"; verdict?: string; title?: string; error?: string };
 
 interface Debater {
   def: ModelDef;
@@ -169,11 +169,14 @@ export async function runDebate(
     }
     const judgeUser = P.judgePrompt(question, finals, critiques, parent);
     let verdict: string | undefined;
+    let title: string | null = null;
     for (const j of judges) {
       try {
         const budget = AbortSignal.any([signal, AbortSignal.timeout(JUDGE_BUDGET_MS)]);
         const r = await chat(j, { system: P.SYSTEM_JUDGE, user: judgeUser, maxTokens: 8192, signal: budget });
-        verdict = j.id === chosenJudge.id ? r.text : `> Giudice di riserva: ${j.label} (${chosenJudge.label} non disponibile)\n\n${r.text}`;
+        const split = P.splitTitle(r.text);
+        title = split.title;
+        verdict = j.id === chosenJudge.id ? split.verdict : `> Giudice di riserva: ${j.label} (${chosenJudge.label} non disponibile)\n\n${split.verdict}`;
         saveMessage(debateId, { model_id: `judge:${j.id}`, phase: "verdict", content: verdict, error: null, ms: r.ms });
         emit({ type: "message", phase: "verdict", modelId: `judge:${j.id}`, text: verdict, ms: r.ms });
         break;
@@ -186,8 +189,8 @@ export async function runDebate(
     }
     if (!verdict) throw new Error("Nessun giudice ha prodotto il verdetto.");
 
-    finishDebate(debateId, "done", verdict);
-    emit({ type: "done", status: "done", verdict });
+    finishDebate(debateId, "done", verdict, title);
+    emit({ type: "done", status: "done", verdict, ...(title ? { title } : {}) });
   } catch (e) {
     const cancelled = signal.aborted;
     const error = cancelled ? "Dibattito annullato" : (e as Error).message;

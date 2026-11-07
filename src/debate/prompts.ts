@@ -71,7 +71,9 @@ export function judgePrompt(question: string, finals: Labeled[], critiques: Labe
 
 POSIZIONI FINALI DEI MEMBRI:\n${block(finals)}${crit}
 
-Produci il verdetto con queste sezioni:
+Inizia con una riga esattamente in questo formato (la parola TITOLO resta in italiano, il titolo è nella lingua della domanda):
+TITOLO: titolo breve della discussione, al massimo 6 parole, senza virgolette né punto finale
+Poi produci il verdetto con queste sezioni:
 ## Risposta
 La risposta migliore alla domanda, completa e autonoma (puoi combinare elementi di più posizioni).
 ## Su cosa concordano
@@ -88,4 +90,13 @@ export function parseChanges(text: string): "nessuno" | "minori" | "sostanziali"
   // Qualche modello traduce comunque la riga: si accetta anche la forma inglese.
   const en = text.match(/CHANGES:\s*\**\s*(none|minor|substantial)/i)?.[1].toLowerCase();
   return en === "none" ? "nessuno" : en === "minor" ? "minori" : en === "substantial" ? "sostanziali" : "?";
+}
+
+/** Toglie dal verdetto la riga "TITOLO: ..." e la restituisce come titolo della discussione. */
+export function splitTitle(text: string): { title: string | null; verdict: string } {
+  const m = text.match(/^\s*\**\s*(?:TITOLO|TITLE)\s*:\s*\**\s*(.+?)\s*\**\s*$/im);
+  if (!m || m.index! > 200) return { title: null, verdict: text };
+  const title = m[1].replace(/^["'«“#\s]+|["'»”.\s]+$/g, "").slice(0, 80) || null;
+  const verdict = (text.slice(0, m.index) + text.slice(m.index! + m[0].length)).replace(/^\s+/, "");
+  return { title, verdict };
 }

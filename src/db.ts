@@ -31,7 +31,7 @@ db.exec(`
 // Migrazione per DB esistenti: aggiunge le colonne mancanti.
 {
   const cols = new Set((db.prepare(`PRAGMA table_info(debates)`).all() as { name: string }[]).map((c) => c.name));
-  const add: [string, string][] = [["options", "TEXT"], ["parent_id", "INTEGER"], ["finished_at", "TEXT"]];
+  const add: [string, string][] = [["options", "TEXT"], ["parent_id", "INTEGER"], ["finished_at", "TEXT"], ["title", "TEXT"]];
   for (const [name, type] of add) if (!cols.has(name)) db.exec(`ALTER TABLE debates ADD COLUMN ${name} ${type}`);
   // Modello che ha risposto davvero e quello che ha sostituito (riserve della stessa famiglia).
   const mcols = new Set((db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[]).map((c) => c.name));
@@ -67,24 +67,24 @@ export function saveMessage(debateId: number, m: MessageRow): void {
     .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null);
 }
 
-export function finishDebate(id: number, status: string, verdict: string | null): void {
-  db.prepare(`UPDATE debates SET status = ?, verdict = ?, finished_at = datetime('now') WHERE id = ?`).run(status, verdict, id);
+export function finishDebate(id: number, status: string, verdict: string | null, title: string | null = null): void {
+  db.prepare(`UPDATE debates SET status = ?, verdict = ?, title = ?, finished_at = datetime('now') WHERE id = ?`).run(status, verdict, title, id);
 }
 
 export function listDebates(limit = 50, q?: string) {
-  const cols = `id, question, status, created_at, parent_id, finished_at`;
+  const cols = `id, question, title, status, created_at, parent_id, finished_at`;
   const term = q?.trim();
   if (!term) return db.prepare(`SELECT ${cols} FROM debates ORDER BY id DESC LIMIT ?`).all(limit);
   const like = `%${term.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
   return db
-    .prepare(`SELECT ${cols} FROM debates WHERE question LIKE ? ESCAPE '\\' OR verdict LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?`)
-    .all(like, like, limit);
+    .prepare(`SELECT ${cols} FROM debates WHERE question LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR verdict LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?`)
+    .all(like, like, like, limit);
 }
 
 export function getDebate(id: number) {
   const d = db.prepare(`SELECT * FROM debates WHERE id = ?`).get(id) as
     | {
-        id: number; question: string; models: string; status: string; verdict: string | null; created_at: string;
+        id: number; question: string; title: string | null; models: string; status: string; verdict: string | null; created_at: string;
         options: string | null; parent_id: number | null; finished_at: string | null;
       }
     | undefined;
