@@ -237,7 +237,7 @@ struct SidebarView: View {
                 Divider()
                 HStack(spacing: 8) {
                     CouncilLogo(size: 18)
-                    Text("AI Council")
+                    Text("Conclave")
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 0)

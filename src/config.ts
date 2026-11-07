@@ -7,7 +7,7 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
  * Cartella dei dati utente (.env, models.json personalizzato, database).
- * L'app Mac la imposta su ~/Library/Application Support/AI Council;
+ * L'app Mac la imposta su ~/Library/Application Support/Conclave;
  * con `npm start` coincide con la cartella del progetto.
  */
 export const DATA_DIR = process.env.COUNCIL_DATA ?? ROOT;

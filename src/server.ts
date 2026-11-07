@@ -217,7 +217,7 @@ createServer((req, res) => {
   const on = config.models.filter(isAvailable).map((m) => m.label);
   // Riga letta dall'app Mac per sapere su quale porta collegarsi (PORT=0 = porta libera a caso).
   console.log(`COUNCIL_PORT=${port}`);
-  console.log(`Motore AI Council pronto su http://localhost:${port} (solo API)`);
+  console.log(`Motore Conclave pronto su http://localhost:${port} (solo API)`);
   console.log(`Modelli disponibili (${on.length}): ${on.join(", ")}`);
   // Controllo all'avvio in background: l'interfaccia mostra lo stato man mano.
   runHealthCheck().then(() => {

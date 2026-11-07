@@ -1,11 +1,11 @@
 #!/bin/zsh
-# Compila l'app nativa "AI Council.app" in dist/.
+# Compila l'app nativa "Conclave.app" in dist/.
 # Uso: npm run app            (solo build)
 #      npm run app:install    (build + copia in /Applications)
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
-APP="$ROOT/dist/AI Council.app"
+APP="$ROOT/dist/Conclave.app"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -16,7 +16,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/server"
 echo "→ Compilazione Swift"
 # Tutti i file Swift dell'app (render-icon.swift è uno strumento di build a parte).
 SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift | grep -v render-icon.swift)}")
-xcrun swiftc -O "${SOURCES[@]}" -o "$APP/Contents/MacOS/AICouncil" \
+xcrun swiftc -O "${SOURCES[@]}" -o "$APP/Contents/MacOS/Conclave" \
   -framework AppKit
 
 echo "→ Lingue dell'interfaccia"
@@ -55,10 +55,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>AI Council</string>
-  <key>CFBundleDisplayName</key><string>AI Council</string>
-  <key>CFBundleIdentifier</key><string>local.peppe.aicouncil</string>
-  <key>CFBundleExecutable</key><string>AICouncil</string>
+  <key>CFBundleName</key><string>Conclave</string>
+  <key>CFBundleDisplayName</key><string>Conclave</string>
+  <key>CFBundleIdentifier</key><string>io.github.peppolone.conclave</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 peppolone — MIT License</string>
+  <key>CFBundleExecutable</key><string>Conclave</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -69,7 +70,6 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSHumanReadableCopyright</key><string>Uso personale</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
@@ -81,9 +81,11 @@ codesign --force --deep --sign - "$APP" >/dev/null 2>&1
 
 if [[ "${1:-}" == "--install" ]]; then
   echo "→ Installazione in /Applications"
+  rm -rf "/Applications/Conclave.app"
+  # L'app si chiamava "AI Council": la vecchia copia ripartirebbe all'accesso con una cartella dati vuota.
   rm -rf "/Applications/AI Council.app"
   cp -R "$APP" /Applications/
-  echo "✓ Installata: /Applications/AI Council.app"
+  echo "✓ Installata: /Applications/Conclave.app"
 else
   echo "✓ Pronta: $APP"
 fi

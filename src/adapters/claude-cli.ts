@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ChatRequest, ChatResult } from "./types.ts";
 
 // Cartella vuota come cwd: Claude non vede file di progetto.
-const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "ai-council-"));
+const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "conclave-"));
 const TIMEOUT_MS = 240_000;
 
 /**

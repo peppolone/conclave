@@ -80,7 +80,7 @@ export async function once(p: Provider, model: string, req: ChatRequest, timeout
       Authorization: `Bearer ${key}`,
       // Intestazioni facoltative richieste da OpenRouter per identificare l'app.
       "HTTP-Referer": "http://localhost",
-      "X-Title": "AI Council",
+      "X-Title": "Conclave",
     },
     body: JSON.stringify({
       model,

@@ -1,4 +1,4 @@
-// Identità visiva di AI Council: colori del marchio, logo nativo e sfondo dell'app.
+// Identità visiva di Conclave: colori del marchio, logo nativo e sfondo dell'app.
 // Il logo riprende l'icona (AppIcon.svg): tre membri del consiglio uniti da linee.
 // Tutte le viste usano questi token, mai colori scritti a mano.
 

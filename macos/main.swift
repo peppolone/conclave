@@ -1,4 +1,4 @@
-// AI Council — app nativa macOS.
+// Conclave — app nativa macOS.
 // Avvia il motore Node incluso nel bundle e ne mostra l'interfaccia in una finestra nativa.
 
 import AppKit
@@ -18,13 +18,45 @@ enum Paths {
             return dir
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("AI Council", isDirectory: true)
+        var dir = base.appendingPathComponent("Conclave", isDirectory: true)
+        // Se il passaggio dal vecchio nome non è riuscito a spostarla, si resta sulla cartella vecchia.
+        let legacy = base.appendingPathComponent("AI Council", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path), FileManager.default.fileExists(atPath: legacy.path) { dir = legacy }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
     static let envFile = dataDir.appendingPathComponent(".env")
     static let logFile = dataDir.appendingPathComponent("server.log")
     static let serverDir = Bundle.main.resourceURL!.appendingPathComponent("server", isDirectory: true)
+}
+
+// MARK: - Passaggio dal vecchio nome
+
+/// Una sola volta, prima di tutto: l'app si chiamava "AI Council" (bundle id `local.peppe.aicouncil`).
+/// Porta le preferenze dal vecchio dominio e sposta la cartella dati con chiavi e cronologia.
+enum LegacyMigration {
+    private static let doneKey = "migratedFromAICouncil"
+
+    static func run() {
+        let d = UserDefaults.standard
+        if !d.bool(forKey: doneKey) {
+            // Solo le chiavi assenti nel dominio nuovo (non `object(forKey:)`, che guarda anche i globali).
+            let current = Bundle.main.bundleIdentifier.flatMap { d.persistentDomain(forName: $0) } ?? [:]
+            for (k, v) in d.persistentDomain(forName: "local.peppe.aicouncil") ?? [:] where current[k] == nil {
+                d.set(v, forKey: k)
+            }
+            d.set(true, forKey: doneKey)
+        }
+        // La cartella si sposta finché serve (se non riesce, `Paths` intanto usa quella vecchia).
+        guard (ProcessInfo.processInfo.environment["COUNCIL_DATA"] ?? "").isEmpty else { return }
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let old = base.appendingPathComponent("AI Council", isDirectory: true)
+        let new = base.appendingPathComponent("Conclave", isDirectory: true)
+        // Mai sotto i piedi della vecchia app ancora aperta: il suo motore scrive in quella cartella.
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: "local.peppe.aicouncil").isEmpty else { return }
+        if fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) { try? fm.moveItem(at: old, to: new) }
+    }
 }
 
 // MARK: - Motore Node
@@ -364,8 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         guard statusItem == nil else { return }
         let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         s.button?.image = Self.menuBarImage
-        s.button?.setAccessibilityLabel("AI Council")
-        s.button?.toolTip = "AI Council"
+        s.button?.setAccessibilityLabel("Conclave")
+        s.button?.toolTip = "Conclave"
         let menu = NSMenu()
         menu.delegate = self
         s.menu = menu
@@ -400,7 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         guard menu === statusItem?.menu else { return }
         menu.removeAllItems()
         menu.addItem(item(L("Nuova discussione"), #selector(newDebateFromMenuBar(_:)), ""))
-        menu.addItem(item(L("Mostra AI Council"), #selector(showMainWindow(_:)), ""))
+        menu.addItem(item(L("Mostra Conclave"), #selector(showMainWindow(_:)), ""))
         // Con una ricerca attiva la lista della barra laterale è filtrata: niente recenti parziali.
         let recent = sidebar.query.trimmingCharacters(in: .whitespaces).isEmpty ? sidebar.items.prefix(5) : []
         if !recent.isEmpty {
@@ -417,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         }
         menu.addItem(.separator())
         menu.addItem(item(L("Impostazioni…"), #selector(openSettings(_:)), ""))
-        let quit = NSMenuItem(title: L("Esci da AI Council"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        let quit = NSMenuItem(title: L("Esci da Conclave"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         menu.addItem(quit)
     }
 
@@ -485,7 +517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         status.stringValue = L("Motore non attivo")
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = L("AI Council non riesce a funzionare")
+        alert.messageText = L("Conclave non riesce a funzionare")
         alert.informativeText = message
         alert.addButton(withTitle: L("Riprova"))
         alert.addButton(withTitle: L("Esci"))
@@ -500,7 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         let main = NSMenu()
 
         let app = NSMenu()
-        app.addItem(withTitle: L("Informazioni su AI Council"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        app.addItem(withTitle: L("Informazioni su Conclave"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
         app.addItem(item(L("Impostazioni…"), #selector(openSettings(_:)), ","))
         app.addItem(item(L("Apri cartella dati"), #selector(openDataFolder(_:)), ""))
@@ -512,12 +544,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         app.addItem(servicesItem)
         NSApp.servicesMenu = services
         app.addItem(.separator())
-        app.addItem(withTitle: L("Nascondi AI Council"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(withTitle: L("Nascondi Conclave"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.addItem(withTitle: L("Nascondi altre"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
             .keyEquivalentModifierMask = [.command, .option]
         app.addItem(withTitle: L("Mostra tutte"), action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(withTitle: L("Esci da AI Council"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: L("Esci da Conclave"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let file = NSMenu(title: L("Archivio"))
         file.addItem(item(L("Nuova discussione"), #selector(newDebate(_:)), "n"))
@@ -570,12 +602,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         NSApp.windowsMenu = win
 
         let help = NSMenu(title: L("Aiuto"))
-        help.addItem(item(L("Aiuto di AI Council"), #selector(showHelp(_:)), "?"))
+        help.addItem(item(L("Aiuto di Conclave"), #selector(showHelp(_:)), "?"))
         help.addItem(.separator())
         help.addItem(item(L("Mostra registro del motore"), #selector(openLog(_:)), ""))
         NSApp.helpMenu = help
 
-        for (title, menu) in [("AI Council", app), (L("Archivio"), file), (L("Modifica"), edit), (L("Vista"), view),
+        for (title, menu) in [("Conclave", app), (L("Archivio"), file), (L("Modifica"), edit), (L("Vista"), view),
                               (L("Discussione"), debate), (L("Finestra"), win), (L("Aiuto"), help)] {
             let top = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             top.submenu = menu
@@ -837,7 +869,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         if let w = helpWindow { w.makeKeyAndOrderFront(nil); return }
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
                          styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        w.title = L("Aiuto di AI Council")
+        w.title = L("Aiuto di Conclave")
         w.isReleasedWhenClosed = false
         w.contentView = NSHostingView(rootView: HelpView())
         w.center()
@@ -876,7 +908,7 @@ struct HelpView: View {
         (L("Avviare una discussione"), L("Scrivi la domanda, scegli almeno due partecipanti, i round e il giudice, poi premi Avvia (⌘↩).")),
         (L("Chiavi API"), L("Claude funziona se hai Claude Code con un abbonamento Claude. Per gli altri modelli aggiungi una chiave gratuita di Gemini, Groq o OpenRouter in Impostazioni (⌘,).")),
         (L("Cronologia"), L("Le discussioni restano nella barra laterale. Cerca con ⌘F, elimina con ⌫ o con il clic destro.")),
-        (L("Se qualcosa non va"), L("Usa AI Council ▸ Riavvia motore (⇧⌘R) oppure Aiuto ▸ Mostra registro del motore.")),
+        (L("Se qualcosa non va"), L("Usa Conclave ▸ Riavvia motore (⇧⌘R) oppure Aiuto ▸ Mostra registro del motore.")),
     ]
 
     var body: some View {
@@ -894,6 +926,8 @@ struct HelpView: View {
         }
     }
 }
+
+LegacyMigration.run()
 
 MainActor.assumeIsolated {
     let app = NSApplication.shared

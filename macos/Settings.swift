@@ -37,7 +37,7 @@ let providerGuides: [ProviderGuide] = [
         url: URL(string: "https://console.groq.com/keys")!,
         steps: [
             L("Apri la console Groq e registrati (va bene anche l'account Google)."),
-            L("In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “AI Council”."),
+            L("In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “Conclave”."),
             L("Copia subito la chiave (inizia con “gsk_”, Groq la mostra una sola volta) e incollala qui sopra."),
         ],
         note: L("Ha limiti al minuto: con molti modelli insieme l'app aspetta e riprova da sola.")),
@@ -454,7 +454,7 @@ struct GeneralPage: View {
     private var loginDetail: String {
         if let loginError { return loginError }
         if LoginItem.needsApproval { return L("Da approvare in Impostazioni di Sistema ▸ Generali ▸ Elementi di login.") }
-        return L("AI Council si apre da solo quando accedi al Mac.")
+        return L("Conclave si apre da solo quando accedi al Mac.")
     }
 
     var body: some View {
@@ -485,7 +485,7 @@ struct GeneralPage: View {
                     .fixedSize()
                 }
                 if language != AppLanguage.launched {
-                    SettingsRow(L("La nuova lingua si applica al riavvio di AI Council.")) {
+                    SettingsRow(L("La nuova lingua si applica al riavvio di Conclave.")) {
                         Button(L("Riavvia ora")) { AppLanguage.relaunch() }
                     }
                 }
@@ -497,7 +497,7 @@ struct GeneralPage: View {
                         .labelsHidden()
                 }
                 SettingsRow(L("Mostra nella barra dei menu"),
-                            detail: L("Icona di AI Council in alto a destra: nuova discussione, discussioni recenti e finestra principale. Chiudendo la finestra l'app resta attiva.")) {
+                            detail: L("Icona di Conclave in alto a destra: nuova discussione, discussioni recenti e finestra principale. Chiudendo la finestra l'app resta attiva.")) {
                     Toggle(L("Mostra nella barra dei menu"), isOn: $menuBar)
                         .toggleStyle(.switch)
                         .labelsHidden()
@@ -621,7 +621,7 @@ struct SettingsView: View {
                         .foregroundStyle(Brand.success)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Puoi usare AI Council gratis").font(.headline)
+                        Text("Puoi usare Conclave gratis").font(.headline)
                         Text("Claude non chiede chiavi se hai installato Claude Code con un abbonamento Claude (facoltativo). Gemini, Groq e OpenRouter danno chiavi gratuite, senza carta di credito: con queste il consiglio ha già più voci. Incolla una chiave, premi “Verifica”, poi “Salva e attiva”.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -674,7 +674,7 @@ struct SettingsView: View {
 
 // MARK: - Pagina Informazioni
 
-let projectURL = URL(string: "https://github.com/peppolone/ai-council")!
+let projectURL = URL(string: "https://github.com/peppolone/conclave")!
 
 struct AboutPage: View {
     private var version: String {
@@ -689,7 +689,7 @@ struct AboutPage: View {
             HStack(spacing: 16) {
                 CouncilLogo(size: 64)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("AI Council").font(.title3.weight(.semibold))
+                    Text("Conclave").font(.title3.weight(.semibold))
                     Text(String(format: L("Versione %@"), version)).foregroundStyle(.secondary).textSelection(.enabled)
                 }
             }
@@ -759,7 +759,7 @@ enum SettingsTab: Int, CaseIterable, Identifiable {
 private let settingsGroups: [(title: String, tabs: [SettingsTab])] = [
     (L("Preferenze"), [.general]),
     (L("Consiglio"), [.keys, .models]),
-    ("AI Council", [.about]),
+    ("Conclave", [.about]),
 ]
 
 /// Pagina scelta; ricorda l'ultima aperta.

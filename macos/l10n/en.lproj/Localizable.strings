@@ -25,8 +25,8 @@
 "2 – fino alla revisione" = "2 – up to revision";
 "3 – completo" = "3 – full";
 "A pagamento" = "Paid";
-"AI Council non riesce a funzionare" = "AI Council can’t run";
-"AI Council si apre da solo quando accedi al Mac." = "AI Council opens automatically when you log in to your Mac.";
+"Conclave non riesce a funzionare" = "Conclave can’t run";
+"Conclave si apre da solo quando accedi al Mac." = "Conclave opens automatically when you log in to your Mac.";
 "Abbonamento Claude" = "Claude Subscription";
 "Abbonamento Claude (Claude Code)" = "Claude subscription (Claude Code)";
 "Aggiorna stato" = "Refresh Status";
@@ -41,7 +41,7 @@
 "Aggiungi modelli…" = "Add Models…";
 "Aggiungi una voce" = "Add a voice";
 "Aiuto" = "Help";
-"Aiuto di AI Council" = "AI Council Help";
+"Aiuto di Conclave" = "Conclave Help";
 "All'apertura l'app prova ogni voce; se un modello non risponde o è stato ritirato, passa a un'altra variante della stessa famiglia." = "At launch the app tests every voice; if a model doesn’t respond or has been retired, it switches to another variant of the same family.";
 "Altri modelli" = "Other Models";
 "Altri provider" = "Other providers";
@@ -138,7 +138,7 @@
 "Eliminare la discussione?" = "Delete the discussion?";
 "Errore" = "Error";
 "Esci" = "Quit";
-"Esci da AI Council" = "Quit AI Council";
+"Esci da Conclave" = "Quit Conclave";
 "Espandi la fase" = "Expand the phase";
 "Espandi tutti" = "Expand All";
 "Espandi tutti i round (⌥⌘→)" = "Expand all rounds (⌥⌘→)";
@@ -171,7 +171,7 @@
 "I modelli rispondono in parallelo, poi %@ emette il verdetto." = "The models answer in parallel, then %@ delivers the verdict.";
 "I modelli rispondono, si criticano a vicenda per %d round, poi %@ emette il verdetto." = "The models answer, critique each other for %d rounds, then %@ delivers the verdict.";
 "I modelli “Gratis” non costano nulla: con “Mostra solo modelli gratuiti” attivo vedi solo quelli. “Consigliato” è una stima basata su versione, data e dimensione del modello; usa “Prova” per sapere se un modello risponde davvero con il tuo account." = "“Free” models cost nothing: with “Show only free models” on, you see only those. “Recommended” is an estimate based on the model’s version, date and size; use “Test” to find out whether a model really responds with your account.";
-"Icona di AI Council in alto a destra: nuova discussione, discussioni recenti e finestra principale. Chiudendo la finestra l'app resta attiva." = "AI Council icon at the top right: new discussion, recent discussions and main window. Closing the window keeps the app running.";
+"Icona di Conclave in alto a destra: nuova discussione, discussioni recenti e finestra principale. Chiudendo la finestra l'app resta attiva." = "Conclave icon at the top right: new discussion, recent discussions and main window. Closing the window keeps the app running.";
 "Ieri" = "Yesterday";
 "Il dibattito continua senza questo modello." = "The debate continues without this model.";
 "Il giudice legge le posizioni finali e scrive il verdetto." = "The judge reads the final positions and writes the verdict.";
@@ -189,7 +189,7 @@
 "In corso" = "In progress";
 "In corso — %@" = "In Progress — %@";
 "In uso: %@" = "In use: %@";
-"In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “AI Council”." = "In “API Keys” click “Create API Key” and give it a name, for example “AI Council”.";
+"In “API Keys” clicca “Create API Key” e dagli un nome, per esempio “Conclave”." = "In “API Keys” click “Create API Key” and give it a name, for example “Conclave”.";
 "In “API Keys” clicca “Create new key”, copia la chiave e incollala qui sopra." = "In “API Keys” click “Create new key”, copy the key and paste it above.";
 "In “API Keys” crea una nuova chiave e copiala (inizia con “csk-”)." = "In “API Keys” create a new key and copy it (it starts with “csk-”).";
 "In “API keys” clicca “Create new secret key”." = "In “API keys” click “Create new secret key”.";
@@ -198,7 +198,7 @@
 "Incolla la chiave" = "Paste the key";
 "Incollala qui sopra, poi scegli i modelli nel pannello “Modelli”." = "Paste it above, then choose the models in the “Models” pane.";
 "Informazioni" = "About";
-"Informazioni su AI Council" = "About AI Council";
+"Informazioni su Conclave" = "About Conclave";
 "Inizia una nuova discussione (⌘N)" = "Start a new discussion (⌘N)";
 "Interrompi" = "Stop";
 "Interrompi (⌘.). Le risposte già arrivate restano salvate." = "Stop (⌘.). Answers already received stay saved.";
@@ -207,7 +207,7 @@
 "Interrotto: il motore è stato riavviato" = "Stopped: the engine was restarted";
 "L'app usa solo i modelli gratuiti, quelli con “:free” nel nome. Senza credito le richieste al giorno sono poche e alcuni modelli sono lenti." = "The app only uses free models, the ones with “:free” in their name. Without credit there are few requests per day and some models are slow.";
 "La chiave funziona." = "The key works.";
-"La nuova lingua si applica al riavvio di AI Council." = "The new language takes effect when AI Council restarts.";
+"La nuova lingua si applica al riavvio di Conclave." = "The new language takes effect when Conclave restarts.";
 "Le chiavi restano solo su questo Mac, nel file “.env” della cartella dati dell'app, leggibile solo dal tuo utente." = "Keys stay only on this Mac, in the “.env” file in the app’s data folder, readable only by your user.";
 "Le discussioni avviate compaiono qui." = "Discussions you start appear here.";
 "Le discussioni restano nella barra laterale. Cerca con ⌘F, elimina con ⌫ o con il clic destro." = "Discussions stay in the sidebar. Search with ⌘F, delete with ⌫ or by right-clicking.";
@@ -224,7 +224,7 @@
 "Modello" = "Model";
 "Modifica" = "Edit";
 "Mostra" = "Show";
-"Mostra AI Council" = "Show AI Council";
+"Mostra Conclave" = "Show Conclave";
 "Mostra altri provider" = "Show other providers";
 "Mostra barra laterale" = "Show Sidebar";
 "Mostra i %d modelli" = "Show the %d models";
@@ -238,7 +238,7 @@
 "Motore non attivo" = "Engine Not Running";
 "Motore non pronto" = "Engine Not Ready";
 "Nascondi" = "Hide";
-"Nascondi AI Council" = "Hide AI Council";
+"Nascondi Conclave" = "Hide Conclave";
 "Nascondi altre" = "Hide Others";
 "Nascondi barra laterale" = "Hide Sidebar";
 "Nascondi la chiave" = "Hide the key";
@@ -291,7 +291,7 @@
 "Prova in corso" = "Testing";
 "Prova la chiave con una richiesta vera ai modelli del consiglio" = "Test the key with a real request to the council models";
 "Provider" = "Provider";
-"Puoi usare AI Council gratis" = "You can use AI Council for free";
+"Puoi usare Conclave gratis" = "You can use Conclave for free";
 "Quota esaurita" = "Quota exhausted";
 "Quote gratuite basse: Gemini Flash circa 20 richieste al giorno (un dibattito ne usa 4), Flash Lite circa 500, Gemma circa 14.000. Finita una quota l'app passa da sola al modello successivo. Nel piano gratuito Google può usare i dati per migliorare i suoi modelli: non inserire informazioni riservate." = "Low free quotas: Gemini Flash about 20 requests a day (a debate uses 4), Flash Lite about 500, Gemma about 14,000. When a quota runs out, the app switches to the next model on its own. On the free plan Google may use your data to improve its models: don’t enter confidential information.";
 "Recenti" = "Recent";
@@ -350,7 +350,7 @@
 "Ultimi 30 giorni" = "Previous 30 Days";
 "Ultimi 7 giorni" = "Previous 7 Days";
 "Un'alternativa a Groq per gli stessi modelli open." = "An alternative to Groq for the same open models.";
-"Usa AI Council ▸ Riavvia motore (⇧⌘R) oppure Aiuto ▸ Mostra registro del motore." = "Use AI Council ▸ Restart Engine (⇧⌘R) or Help ▸ Show Engine Log.";
+"Usa Conclave ▸ Riavvia motore (⇧⌘R) oppure Aiuto ▸ Mostra registro del motore." = "Use Conclave ▸ Restart Engine (⇧⌘R) or Help ▸ Show Engine Log.";
 "Utile come voce europea in più nel consiglio." = "Useful as an extra European voice in the council.";
 "Vai a: %@" = "Go to: %@";
 "Vai al round in corso" = "Go to Current Round";
