@@ -1,13 +1,16 @@
 // Prompt delle fasi del dibattito. I partecipanti si vedono solo come
 // "Risposta A/B/C": nessuno sa quale modello ha scritto cosa.
 
+const LANG = `Lingua: rispondi sempre nella stessa lingua in cui è scritta la DOMANDA (se è in inglese rispondi in inglese, se è in spagnolo in spagnolo, e così via), anche se queste istruzioni sono in italiano.`;
+
 const MAX_CHARS = 4500; // tetto per testo citato: i piani gratuiti hanno limiti di token stretti
 
 const clip = (s: string) => (s.length > MAX_CHARS ? s.slice(0, MAX_CHARS) + "\n[…testo troncato]" : s);
 
 export const SYSTEM_DEBATER = `Sei un membro di un consiglio di esperti indipendenti che discute una domanda per arrivare alla risposta migliore possibile.
 Regole:
-- Rispondi in italiano, in modo preciso e concreto.
+- ${LANG}
+- Sii preciso e concreto.
 - Distingui fatti verificabili, stime e opinioni. Se non sai qualcosa, dillo.
 - Non inventare fonti, numeri o citazioni.
 - Cambia idea se un argomento altrui è migliore: l'obiettivo è la verità, non vincere.
@@ -15,7 +18,8 @@ Regole:
 
 export const SYSTEM_JUDGE = `Sei il giudice imparziale di un consiglio di esperti AI. Non hai partecipato al dibattito.
 Valuti la qualità degli argomenti, non il numero di voti: tre posizioni concordi possono essere sbagliate.
-Rispondi in italiano, in Markdown.`;
+Rispondi in Markdown.
+${LANG} Traduci nella lingua della domanda anche i titoli delle sezioni del verdetto.`;
 
 export type Labeled = { label: string; text: string };
 
@@ -49,7 +53,7 @@ export function revisePrompt(question: string, own: string, critiques: Labeled[]
   return `DOMANDA:\n${question}\n\nLA TUA RISPOSTA INIZIALE:\n${clip(own)}\n\nCRITICHE FORMULATE DAI MEMBRI DEL CONSIGLIO (riguardano tutte le risposte, inclusa la tua):\n${block(critiques)}
 
 Round 2 — Revisione. Rispondi alle critiche che ti riguardano: accetta quelle fondate, respingi motivatamente le altre. Poi scrivi la tua risposta rivista.
-Termina con una riga esattamente in questo formato:
+Termina con una riga esattamente in questo formato (la parola CAMBIAMENTI e i valori restano in italiano, qualunque sia la lingua della risposta):
 CAMBIAMENTI: nessuno | minori | sostanziali`;
 }
 
@@ -80,5 +84,8 @@ alta / media / bassa, con il motivo e cosa servirebbe verificare.`;
 /** Legge la riga "CAMBIAMENTI: ..." del round 2. */
 export function parseChanges(text: string): "nessuno" | "minori" | "sostanziali" | "?" {
   const m = text.match(/CAMBIAMENTI:\s*\**\s*(nessuno|minori|sostanziali)/i);
-  return m ? (m[1].toLowerCase() as "nessuno" | "minori" | "sostanziali") : "?";
+  if (m) return m[1].toLowerCase() as "nessuno" | "minori" | "sostanziali";
+  // Qualche modello traduce comunque la riga: si accetta anche la forma inglese.
+  const en = text.match(/CHANGES:\s*\**\s*(none|minor|substantial)/i)?.[1].toLowerCase();
+  return en === "none" ? "nessuno" : en === "minor" ? "minori" : en === "substantial" ? "sostanziali" : "?";
 }
