@@ -6,6 +6,11 @@ import { DATA_DIR } from "./config.ts";
 mkdirSync(join(DATA_DIR, "data"), { recursive: true });
 const db = new DatabaseSync(join(DATA_DIR, "data", "council.db"));
 
+// Ricerca senza distinzione di maiuscole e accenti ("perche" trova "PERCHÉ"):
+// lower() e LIKE di SQLite trattano così solo i caratteri ASCII.
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+db.function("fold", { deterministic: true }, (s) => (s == null ? null : fold(String(s))));
+
 db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS debates (
@@ -75,9 +80,9 @@ export function listDebates(limit = 50, q?: string) {
   const cols = `id, question, title, status, created_at, parent_id, finished_at`;
   const term = q?.trim();
   if (!term) return db.prepare(`SELECT ${cols} FROM debates ORDER BY id DESC LIMIT ?`).all(limit);
-  const like = `%${term.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
+  const like = `%${fold(term).replace(/[\\%_]/g, (c) => "\\" + c)}%`;
   return db
-    .prepare(`SELECT ${cols} FROM debates WHERE question LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR verdict LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?`)
+    .prepare(`SELECT ${cols} FROM debates WHERE fold(question) LIKE ? ESCAPE '\\' OR fold(title) LIKE ? ESCAPE '\\' OR fold(verdict) LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?`)
     .all(like, like, like, limit);
 }
 
