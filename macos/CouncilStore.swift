@@ -18,8 +18,8 @@ struct VoiceInfo: Identifiable, Equatable {
     var problem: String? {
         guard let h = health else { return nil }
         switch h.status {
-        case "down": return "Non risponde" + (h.note.map { " — \($0)" } ?? "")
-        case "busy": return "Sovraccarico, riproverà" + (h.note.map { " — \($0)" } ?? "")
+        case "down": return L("Non risponde") + (h.note.map { " — \($0)" } ?? "")
+        case "busy": return L("Sovraccarico, riproverà") + (h.note.map { " — \($0)" } ?? "")
         default: return nil
         }
     }
@@ -108,12 +108,12 @@ final class CouncilStore: ObservableObject {
 
     static let phaseOrder = ["initial", "critique", "revise", "final"]
     static let phaseTitles = [
-        "initial": "Risposte iniziali",
-        "critique": "Round 1 · Critica incrociata",
-        "revise": "Round 2 · Revisione",
-        "final": "Round 3 · Posizione finale",
+        "initial": L("Risposte iniziali"),
+        "critique": L("Round 1 · Critica incrociata"),
+        "revise": L("Round 2 · Revisione"),
+        "final": L("Round 3 · Posizione finale"),
     ]
-    static let roundsTitles = [3: "3 – completo", 2: "2 – fino alla revisione", 1: "1 – solo critica", 0: "0 – solo risposte, veloce"]
+    static let roundsTitles = [3: L("3 – completo"), 2: L("2 – fino alla revisione"), 1: L("1 – solo critica"), 0: L("0 – solo risposte, veloce")]
 
     init(port: @escaping () -> Int) { self.port = port }
 
@@ -137,7 +137,7 @@ final class CouncilStore: ObservableObject {
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
             let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? "errore \(h.statusCode)"])
+            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
         }
         return data
     }
@@ -227,18 +227,26 @@ final class CouncilStore: ObservableObject {
         engineReady && !starting && orderedSelection.count >= 2 && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Chiamate previste ai modelli (verdetto escluso): una per partecipante a ogni fase.
+    var estimatedCalls: Int { orderedSelection.count * (1 + rounds) }
+
+    /// true quando la stima ha senso (motore pronto, almeno due partecipanti).
+    var canEstimate: Bool {
+        engineReady && voices.contains { !$0.isClaude } && orderedSelection.count >= 2
+    }
+
     var hint: String {
-        if !engineReady { return "Avvio del motore…" }
-        if voices.filter({ !$0.isClaude }).isEmpty { return "Nessuna chiave gratuita configurata: aggiungila nelle Impostazioni (⌘,)." }
+        if !engineReady { return L("Avvio del motore…") }
+        if voices.filter({ !$0.isClaude }).isEmpty { return L("Nessuna chiave gratuita configurata: aggiungila nelle Impostazioni (⌘,).") }
         let n = orderedSelection.count
-        if n < 2 { return "Scegli almeno 2 partecipanti cliccandoci sopra." }
-        return "Circa \(n * (1 + rounds)) chiamate ai modelli + 1 verdetto · ⌘↩ per avviare"
+        if n < 2 { return L("Scegli almeno 2 partecipanti cliccandoci sopra.") }
+        return String(format: L("Circa %d chiamate ai modelli + 1 verdetto · ⌘↩ per avviare"), estimatedCalls)
     }
 
     var subtitle: String {
         rounds == 0
-            ? "I modelli rispondono in parallelo, poi \(judgeLabel) emette il verdetto."
-            : "I modelli rispondono, si criticano a vicenda per \(rounds) round, poi \(judgeLabel) emette il verdetto."
+            ? String(format: L("I modelli rispondono in parallelo, poi %@ emette il verdetto."), judgeLabel)
+            : String(format: L("I modelli rispondono, si criticano a vicenda per %d round, poi %@ emette il verdetto."), rounds, judgeLabel)
     }
 
     // MARK: Avvio
@@ -258,7 +266,7 @@ final class CouncilStore: ObservableObject {
             question = ""
             parent = nil
             current = DebateState(id: id, question: q, rounds: rounds, judgeLabel: judgeLabel, parentId: body["parentId"] as? Int,
-                                  status: "running", statusText: "Dibattito in corso…", startedAt: .now)
+                                  status: "running", statusText: Self.statusText("running"), startedAt: .now)
             onCurrentChanged?(id)
             onHistoryChanged?()
             listen(id)
@@ -299,11 +307,11 @@ final class CouncilStore: ObservableObject {
             }
             if let r = e["rounds"] as? Int { d.rounds = r }
             if let j = e["judge"] as? String { d.judgeLabel = j }
-            d.statusText = "Dibattito in corso…"
+            d.statusText = Self.statusText("running")
         case "phase":
             let phase = e["phase"] as? String ?? ""
             let note = e["note"] as? String
-            if phase == "verdict" { d.statusText = "Il giudice sta valutando…"; d.judging = true; break }
+            if phase == "verdict" { d.statusText = L("Il giudice sta valutando…"); d.judging = true; break }
             if let i = d.phases.firstIndex(where: { $0.id == phase }) {
                 if let note { d.phases[i].note = note }
             } else {
@@ -333,9 +341,9 @@ final class CouncilStore: ObservableObject {
         case "error":
             let phase = e["phase"] as? String ?? ""
             let modelId = e["modelId"] as? String ?? ""
-            let error = e["error"] as? String ?? "errore"
+            let error = e["error"] as? String ?? L("errore")
             if phase == "verdict" {
-                d.statusText = "Giudice non disponibile, provo un altro modello…"
+                d.statusText = L("Giudice non disponibile, provo un altro modello…")
             } else {
                 upsert(&d, phase: phase, modelId: modelId) {
                     $0.error = error
@@ -347,7 +355,7 @@ final class CouncilStore: ObservableObject {
             d.status = status
             d.judging = false
             d.finishedAt = .now
-            d.statusText = status == "done" ? "Concluso" : (e["error"] as? String ?? status)
+            d.statusText = status == "done" ? Self.statusText("done") : (e["error"] as? String ?? status)
             if status == "done" { onVerdictReady?(d.question) }
             onHistoryChanged?()
         default:
@@ -370,7 +378,7 @@ final class CouncilStore: ObservableObject {
     }
 
     private func title(for modelId: String, in d: DebateState) -> String {
-        if let p = d.participants[modelId] { return p.letter.isEmpty ? p.label : "\(p.label) · Risposta \(p.letter)" }
+        if let p = d.participants[modelId] { return p.letter.isEmpty ? p.label : String(format: L("%@ · Risposta %@"), p.label, p.letter) }
         return voices.first { $0.id == modelId }?.label ?? modelId
     }
 
@@ -478,11 +486,11 @@ final class CouncilStore: ObservableObject {
 
     static func statusText(_ s: String) -> String {
         switch s {
-        case "done": return "Concluso"
-        case "failed": return "Non riuscito"
-        case "cancelled": return "Annullato"
-        case "interrupted": return "Interrotto (motore riavviato)"
-        case "running": return "Dibattito in corso…"
+        case "done": return L("Concluso")
+        case "failed": return L("Non riuscito")
+        case "cancelled": return L("Annullato")
+        case "interrupted": return L("Interrotto (motore riavviato)")
+        case "running": return L("Dibattito in corso…")
         default: return s
         }
     }
@@ -500,13 +508,14 @@ final class CouncilStore: ObservableObject {
     /// Riga sotto la domanda: "3 round · giudice Claude Sonnet · durata 1 min 34 s".
     func meta(_ d: DebateState) -> String {
         var parts: [String] = []
-        if let r = d.rounds { parts.append(r == 0 ? "senza round" : "\(r) round") }
-        if let j = d.judgeLabel { parts.append("giudice \(j)") }
+        if let r = d.rounds { parts.append(r == 0 ? L("senza round") : String(format: L("%d round"), r)) }
+        if let j = d.judgeLabel { parts.append(String(format: L("giudice %@"), j)) }
         if let s = d.startedAt {
             let end = d.finishedAt ?? (d.isRunning ? Date.now : nil)
             if let end {
                 let secs = max(0, Int(end.timeIntervalSince(s)))
-                parts.append((d.isRunning ? "in corso da " : "durata ") + (secs >= 60 ? "\(secs / 60) min \(secs % 60) s" : "\(secs) s"))
+                let dur = secs >= 60 ? String(format: L("%d min %d s"), secs / 60, secs % 60) : String(format: L("%d s"), secs)
+                parts.append(String(format: d.isRunning ? L("in corso da %@") : L("durata %@"), dur))
             }
         }
         return parts.joined(separator: " · ")
@@ -515,7 +524,7 @@ final class CouncilStore: ObservableObject {
     func exportMarkdown() -> (filename: String, text: String)? {
         guard let d = current else { return nil }
         var out = ["# \(d.question)", "", "_\(meta(d))_", ""]
-        if let v = d.verdict { out += ["## Verdetto", "", v, ""] }
+        if let v = d.verdict { out += ["## " + L("Verdetto"), "", v, ""] }
         for p in d.phases {
             out += ["## \(p.title)", ""]
             if let n = p.note { out += ["_\(n)_", ""] }
@@ -528,7 +537,7 @@ final class CouncilStore: ObservableObject {
         let slug = d.question.folding(options: .diacriticInsensitive, locale: .current).lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return ((slug.isEmpty ? "dibattito" : String(slug.prefix(60))) + ".md", out.joined(separator: "\n"))
+        return ((slug.isEmpty ? L("dibattito") : String(slug.prefix(60))) + ".md", out.joined(separator: "\n"))
     }
 }
 
@@ -547,19 +556,19 @@ struct DebateStep: Identifiable, Equatable {
 
 extension CouncilStore {
     static let phaseShortNames = [
-        "initial": "Risposte", "critique": "Critica", "revise": "Revisione",
-        "final": "Posizione finale", "verdict": "Verdetto",
+        "initial": L("Risposte"), "critique": L("Critica"), "revise": L("Revisione"),
+        "final": L("Posizione finale"), "verdict": L("Verdetto"),
     ]
     static let phaseNames = [
-        "initial": "Risposte iniziali", "critique": "Critica incrociata", "revise": "Revisione",
-        "final": "Posizione finale", "verdict": "Verdetto",
+        "initial": L("Risposte iniziali"), "critique": L("Critica incrociata"), "revise": L("Revisione"),
+        "final": L("Posizione finale"), "verdict": L("Verdetto"),
     ]
     static let phaseDescriptions = [
-        "initial": "Ogni modello risponde alla domanda da solo, senza vedere le risposte degli altri.",
-        "critique": "Ogni modello legge le risposte anonime degli altri e ne indica errori e punti deboli.",
-        "revise": "Ogni modello rivede la propria risposta tenendo conto delle critiche ricevute.",
-        "final": "Ogni modello confronta le risposte riviste e dichiara la sua posizione definitiva.",
-        "verdict": "Il giudice legge le posizioni finali e scrive il verdetto.",
+        "initial": L("Ogni modello risponde alla domanda da solo, senza vedere le risposte degli altri."),
+        "critique": L("Ogni modello legge le risposte anonime degli altri e ne indica errori e punti deboli."),
+        "revise": L("Ogni modello rivede la propria risposta tenendo conto delle critiche ricevute."),
+        "final": L("Ogni modello confronta le risposte riviste e dichiara la sua posizione definitiva."),
+        "verdict": L("Il giudice legge le posizioni finali e scrive il verdetto."),
     ]
 
     /// Numero di round del dibattito (0–3).
@@ -571,11 +580,22 @@ extension CouncilStore {
     func phaseHeading(_ id: String, in d: DebateState) -> String {
         let name = Self.phaseNames[id] ?? id
         switch id {
-        case "initial": return "Apertura · \(name)"
-        case "verdict": return "Chiusura · \(name)"
+        case "initial": return String(format: L("Apertura · %@"), name)
+        case "verdict": return String(format: L("Chiusura · %@"), name)
         default:
             guard let i = Self.phaseOrder.firstIndex(of: id) else { return name }
-            return "Round \(i) di \(max(roundCount(d), i)) · \(name)"
+            return String(format: L("Round %d di %d · %@"), i, max(roundCount(d), i), name)
+        }
+    }
+
+    /// Riga sopra il nome della fase: "Apertura", "Round 2 di 3", "Chiusura".
+    func phaseEyebrow(_ id: String, in d: DebateState) -> String {
+        switch id {
+        case "initial": return L("Apertura")
+        case "verdict": return L("Chiusura")
+        default:
+            guard let i = Self.phaseOrder.firstIndex(of: id) else { return "" }
+            return String(format: L("Round %d di %d"), i, max(roundCount(d), i))
         }
     }
 
