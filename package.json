@@ -1,6 +1,7 @@
 {
   "name": "ai-council",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Consiglio di AI locale: più modelli discutono in 3 round, Claude giudica.",
