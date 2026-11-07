@@ -92,10 +92,16 @@ struct ParentRef: Equatable { let id: Int; let question: String }
 final class CouncilStore: ObservableObject {
     // Opzioni del consiglio
     @Published var voices: [VoiceInfo] = []
-    @Published var selected: Set<String> = [] { didSet { persist() } }
-    @Published var rounds = 3 { didSet { persist() } }
-    @Published var judge = "claude" { didSet { persist() } }
-    @Published var claudeModel = "sonnet" { didSet { persist() } }
+    // Ogni preferenza si salva da sola, e solo per scelta dell'utente (non durante `syncing`).
+    @Published var selected: Set<String> = [] { didSet { persistSelected() } }
+    @Published var rounds = 3 { didSet { persist(rounds, "council.rounds") } }
+    @Published var judge = "claude" { didSet { persist(judge, "council.judge") } }
+    @Published var claudeModel = "sonnet" { didSet { persist(claudeModel, "council.claudeModel") } }
+    /// true mentre si allineano le scelte ai modelli disponibili: un modello che all'avvio
+    /// non risponde ancora sparisce dalla scelta mostrata, ma non da quella salvata.
+    private var syncing = false
+    /// Voci predefinite del motore: la scelta iniziale quando l'utente non ne ha ancora salvata una.
+    private var defaultIds: [String] = []
     @Published var claudeModels = ["sonnet", "opus", "haiku"]
     @Published var lockedCount = 0          // voci configurate ma senza chiave API
     @Published var checking = false
@@ -192,20 +198,21 @@ final class CouncilStore: ObservableObject {
         checking = j["checking"] as? Bool ?? false
         if let cm = j["claudeModels"] as? [String], !cm.isEmpty { claudeModels = cm }
 
-        if !loadedPrefs {
-            loadedPrefs = true
-            let d = j["defaults"] as? [String: Any] ?? [:]
-            let saved = defaults.stringArray(forKey: "council.selected")
-            let defaultIds = list.filter { ($0["default"] as? Bool) == true }.compactMap { $0["id"] as? String }
-            selected = Set(saved ?? defaultIds)
-            rounds = defaults.object(forKey: "council.rounds") as? Int ?? d["rounds"] as? Int ?? 3
-            judge = defaults.string(forKey: "council.judge") ?? d["judge"] as? String ?? "claude"
-            claudeModel = defaults.string(forKey: "council.claudeModel") ?? d["claudeModel"] as? String ?? "sonnet"
-        }
-        // Scelte che non esistono più (voce rimossa o senza chiave) vengono ignorate.
-        selected = selected.filter { id in voices.contains { $0.id == id } }
+        // Le scelte salvate sono la fonte: ogni scelta dell'utente si salva subito, quindi a ogni
+        // ricarica si ripartono da lì (una voce tornata disponibile torna scelta). Quelle che ora
+        // non esistono (voce rimossa, senza chiave o non pronta) vengono ignorate senza salvarlo.
+        syncing = true
+        let d = j["defaults"] as? [String: Any] ?? [:]
+        defaultIds = list.filter { ($0["default"] as? Bool) == true }.compactMap { $0["id"] as? String }
+        selected = Set(defaults.stringArray(forKey: "council.selected") ?? defaultIds)
+            .filter { id in voices.contains { $0.id == id } }
+        rounds = defaults.object(forKey: "council.rounds") as? Int ?? d["rounds"] as? Int ?? 3
+        judge = defaults.string(forKey: "council.judge") ?? d["judge"] as? String ?? "claude"
         if judge != "claude" && !voices.contains(where: { $0.id == judge }) { judge = "claude" }
+        claudeModel = defaults.string(forKey: "council.claudeModel") ?? d["claudeModel"] as? String ?? "sonnet"
         if !claudeModels.contains(claudeModel) { claudeModel = claudeModels.first ?? "sonnet" }
+        syncing = false
+        loadedPrefs = true
 
         // Durante il controllo d'avvio si aggiorna lo stato ogni pochi secondi.
         healthPoll?.cancel()
@@ -218,12 +225,17 @@ final class CouncilStore: ObservableObject {
         }
     }
 
-    private func persist() {
-        guard loadedPrefs else { return }
-        defaults.set(Array(selected), forKey: "council.selected")
-        defaults.set(rounds, forKey: "council.rounds")
-        defaults.set(judge, forKey: "council.judge")
-        defaults.set(claudeModel, forKey: "council.claudeModel")
+    private func persist(_ value: Any, _ key: String) {
+        guard loadedPrefs, !syncing else { return }
+        defaults.set(value, forKey: key)
+    }
+
+    /// Salva la scelta tenendo le voci salvate che ora non sono disponibili (l'utente non può
+    /// averle tolte: non sono mostrate), così tornano scelte quando il modello torna.
+    private func persistSelected() {
+        guard loadedPrefs, !syncing else { return }
+        let hidden = (defaults.stringArray(forKey: "council.selected") ?? defaultIds).filter { id in !voices.contains { $0.id == id } }
+        defaults.set(Array(selected.union(hidden)).sorted(), forKey: "council.selected")
     }
 
     func displayName(_ v: VoiceInfo) -> String { v.isClaude ? "Claude \(claudeModel.capitalized)" : v.label }
