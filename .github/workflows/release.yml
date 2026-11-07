@@ -1,12 +1,20 @@
 # DMG per Apple Silicon e Intel.
-# - Tag v* (es. v0.1.0): crea la GitHub Release con i due DMG e i checksum.
-# - Avvio manuale (Actions ▸ Release ▸ Run workflow): solo i DMG come artifact, per provare.
+# - Push su main: controlli + DMG come artifact (ogni commit ha la sua build di prova).
+# - Tag v* (es. v0.1.0): in più crea la GitHub Release con i due DMG e i checksum.
+# - Avvio manuale (Actions ▸ Release ▸ Run workflow): come un push.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
+
+# Un push nuovo annulla la build superata dello stesso ramo (le release non si annullano).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 permissions:
   contents: write
@@ -14,11 +22,13 @@ permissions:
 jobs:
   dmg:
     runs-on: macos-26
+    # I fork non usano i runner macOS per questo workflow.
+    if: github.repository_owner == 'peppolone'
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -68,7 +78,7 @@ jobs:
           hdiutil detach "$RUNNER_TEMP/dmg" >/dev/null
           grep COUNCIL_PORT "$DATA/out.log" || { cat "$DATA/out.log"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Conclave-${{ env.VERSION }}
           path: out/*
