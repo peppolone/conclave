@@ -29,6 +29,13 @@ echo "→ Copia del motore"
 cp -R "$ROOT/src" "$APP/Contents/Resources/server/"
 cp "$ROOT/models.json" "$ROOT/.env.example" "$ROOT/package.json" "$APP/Contents/Resources/server/"
 
+echo "→ Colore d'accento"
+# AccentColor del marchio per i controlli di sistema (interruttori, pulsanti predefiniti): serve Xcode (actool).
+xcrun actool "$ROOT/macos/Assets.xcassets" --compile "$APP/Contents/Resources" \
+  --platform macosx --minimum-deployment-target 26.0 --accent-color AccentColor \
+  --output-partial-info-plist "$TMP/assets.plist" --output-format human-readable-text >/dev/null
+[[ -f "$APP/Contents/Resources/Assets.car" ]] || { echo "compilazione Assets.xcassets fallita"; exit 1; }
+
 echo "→ Icona"
 xcrun swiftc -O "$ROOT/macos/render-icon.swift" -o "$TMP/render-icon" -framework AppKit
 SRC="$TMP/AppIcon.png"
@@ -53,6 +60,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>local.peppe.aicouncil</string>
   <key>CFBundleExecutable</key><string>AICouncil</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
