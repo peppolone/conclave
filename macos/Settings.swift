@@ -866,8 +866,8 @@ final class SettingsWindowController {
     private func makeWindow() -> NSWindow {
         let close: () -> Void = { [weak self] in self?.window?.close() }
 
-        let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav).appFont())
-        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close).appFont())
+        let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav).appFont().rebuildOnAppearanceChange())
+        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close).appFont().rebuildOnAppearanceChange())
         // La finestra ha dimensione fissa: il contenuto SwiftUI non deve ridimensionarla.
         sidebarVC.sizingOptions = []
         detailVC.sizingOptions = []

@@ -83,6 +83,16 @@ enum AppFont: String, CaseIterable, Identifiable {
 extension View {
     /// Applica il carattere scelto nelle Impostazioni (aggiornamento immediato).
     func appFont() -> some View { modifier(AppFontModifier()) }
+
+    /// Ricrea la vista quando cambia il tema: i menu a comparsa (NSPopUpButton) altrimenti
+    /// restano disegnati con i colori del tema precedente e il testo diventa invisibile.
+    func rebuildOnAppearanceChange() -> some View { modifier(AppearanceRebuild()) }
+}
+
+private struct AppearanceRebuild: ViewModifier {
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+
+    func body(content: Content) -> some View { content.id(appearance) }
 }
 
 private struct AppFontModifier: ViewModifier {
