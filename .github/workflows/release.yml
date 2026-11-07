@@ -1,0 +1,82 @@
+# DMG per Apple Silicon e Intel.
+# - Tag v* (es. v0.1.0): crea la GitHub Release con i due DMG e i checksum.
+# - Avvio manuale (Actions ▸ Release ▸ Run workflow): solo i DMG come artifact, per provare.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Strumenti
+        run: |
+          xcodebuild -version
+          node -v
+
+      - name: Controlli del motore
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test:chaos
+
+      - name: Versione
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then V="${GITHUB_REF_NAME#v}"; else V="$(node -p 'require("./package.json").version')"; fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "Versione: $V"
+
+      - name: Compilazione e DMG
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          mkdir -p out
+          for ARCH in arm64 x86_64; do
+            [[ "$ARCH" == arm64 ]] && LABEL=apple-silicon || LABEL=intel
+            scripts/fetch-node.sh "$ARCH" "$RUNNER_TEMP/node-$ARCH/node"
+            ARCH="$ARCH" NODE_BIN="$RUNNER_TEMP/node-$ARCH/node" zsh scripts/build-app.sh
+            echo "Eseguibile: $(lipo -archs dist/Conclave.app/Contents/MacOS/Conclave) · Node: $(lipo -archs dist/Conclave.app/Contents/MacOS/node)"
+            codesign --verify --deep --strict dist/Conclave.app
+            scripts/make-dmg.sh dist/Conclave.app "out/Conclave-$VERSION-$LABEL.dmg"
+          done
+          (cd out && shasum -a 256 *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Prova di avvio del motore incluso (arm64)
+        run: |
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/dmg" "out/Conclave-$VERSION-apple-silicon.dmg" >/dev/null
+          APP="$RUNNER_TEMP/dmg/Conclave.app"
+          "$APP/Contents/MacOS/node" -v
+          DATA="$(mktemp -d)"
+          COUNCIL_DATA="$DATA" PORT=0 "$APP/Contents/MacOS/node" --disable-warning=ExperimentalWarning \
+            "$APP/Contents/Resources/server/src/server.ts" > "$DATA/out.log" 2>&1 &
+          PID=$!
+          for i in {1..20}; do grep -q COUNCIL_PORT "$DATA/out.log" && break; sleep 1; done
+          kill $PID || true
+          hdiutil detach "$RUNNER_TEMP/dmg" >/dev/null
+          grep COUNCIL_PORT "$DATA/out.log" || { cat "$DATA/out.log"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Conclave-${{ env.VERSION }}
+          path: out/*
+          if-no-files-found: error
+
+      - name: GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --title "Conclave $VERSION" --generate-notes --verify-tag

@@ -2,10 +2,17 @@
 # Compila l'app nativa "Conclave.app" in dist/.
 # Uso: npm run app            (solo build)
 #      npm run app:install    (build + copia in /Applications)
+# Variabili per le versioni distribuite (vedi .github/workflows/release.yml):
+#   ARCH=arm64|x86_64   architettura dell'eseguibile (predefinita: quella di questo Mac)
+#   VERSION=1.2.3       versione dell'app (predefinita: quella di package.json)
+#   NODE_BIN=<file>     binario di Node da includere nell'app (scripts/fetch-node.sh)
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
 APP="$ROOT/dist/Conclave.app"
+ARCH="${ARCH:-$(uname -m)}"
+VERSION="${VERSION:-$(node -p 'require(process.argv[1]).version' "$ROOT/package.json")}"
+BUILD="${BUILD_NUMBER:-1}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -13,11 +20,17 @@ echo "→ Pulizia"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/server"
 
-echo "→ Compilazione Swift"
+echo "→ Compilazione Swift ($ARCH)"
 # Tutti i file Swift dell'app (render-icon.swift è uno strumento di build a parte).
 SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift | grep -v render-icon.swift)}")
-xcrun swiftc -O "${SOURCES[@]}" -o "$APP/Contents/MacOS/Conclave" \
+xcrun swiftc -O -target "$ARCH-apple-macos26.0" "${SOURCES[@]}" -o "$APP/Contents/MacOS/Conclave" \
   -framework AppKit
+
+if [[ -n "${NODE_BIN:-}" ]]; then
+  echo "→ Node incluso"
+  cp "$NODE_BIN" "$APP/Contents/MacOS/node"
+  [[ "$(lipo -archs "$APP/Contents/MacOS/node")" == *"$ARCH"* ]] || { echo "Node non è $ARCH"; exit 1; }
+fi
 
 echo "→ Lingue dell'interfaccia"
 # Le chiavi sono il testo italiano: it.lproj è vuoto ma dichiara l'italiano come lingua dell'app.
@@ -50,7 +63,7 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 echo "→ Info.plist"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,8 +76,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
   <key>CFBundleDevelopmentRegion</key><string>it</string>
   <key>CFBundleLocalizations</key><array><string>it</string><string>en</string></array>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
@@ -77,7 +90,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo "→ Firma locale"
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+codesign --force --deep --sign - "$APP"
 
 if [[ "${1:-}" == "--install" ]]; then
   echo "→ Installazione in /Applications"

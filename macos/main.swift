@@ -114,7 +114,10 @@ final class ServerController {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let path = Self.loginPath()
-            guard let node = Self.find("node", in: path) else {
+            // Le versioni scaricate (DMG) includono Node 24 in Contents/MacOS; in sviluppo si usa quello del PATH.
+            let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/node").path
+            let node = FileManager.default.isExecutableFile(atPath: bundled) ? bundled : Self.find("node", in: path)
+            guard let node else {
                 DispatchQueue.main.async { self.onCrash?(L("Node.js non trovato. Installalo (es. con nvm) e riapri l'app.")) }
                 return
             }
