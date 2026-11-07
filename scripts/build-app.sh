@@ -19,6 +19,12 @@ SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift | grep -v render-icon.swift)}")
 xcrun swiftc -O "${SOURCES[@]}" -o "$APP/Contents/MacOS/AICouncil" \
   -framework AppKit
 
+echo "→ Lingue dell'interfaccia"
+# Le chiavi sono il testo italiano: it.lproj è vuoto ma dichiara l'italiano come lingua dell'app.
+for lp in "$ROOT"/macos/l10n/*.lproj; do
+  cp -R "$lp" "$APP/Contents/Resources/"
+done
+
 echo "→ Copia del motore"
 cp -R "$ROOT/src" "$APP/Contents/Resources/server/"
 cp "$ROOT/models.json" "$ROOT/.env.example" "$ROOT/package.json" "$APP/Contents/Resources/server/"
@@ -51,6 +57,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>CFBundleDevelopmentRegion</key><string>it</string>
+  <key>CFBundleLocalizations</key><array><string>it</string><string>en</string></array>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
