@@ -467,6 +467,11 @@ struct DebateView: View {
     /// true finché si segue il dibattito dal vivo (l'utente non ha scorso in su per rileggere).
     @State private var following = true
     @State private var userScrolling = false
+    /// true quando la vista è lontana dal fondo (più di 300 punti). Solo un booleano: cambia di
+    /// rado, mentre la distanza cambierebbe a ogni scatto e ricalcolerebbe tutta la vista.
+    @State private var awayFromBottom = false
+    /// Larghezza della colonna del contenuto: decide le card per riga.
+    @State private var contentWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(store: CouncilStore, debate: DebateState, saveFile: @escaping (_ filename: String, _ text: String) -> Void) {
@@ -481,7 +486,10 @@ struct DebateView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                // Pila pigra, come la chat di Claude: si costruiscono solo le righe vicine alla parte
+                // visibile. Ogni fase si scompone in righe (intestazione e una riga per coppia di
+                // card), così anche un round lungo non va misurato tutto insieme.
+                LazyVStack(alignment: .leading, spacing: 0) {
                     header
 
                     if !debate.phases.isEmpty || debate.isRunning {
@@ -516,34 +524,39 @@ struct DebateView: View {
 
                     if !debate.phases.isEmpty {
                         courseHeading.padding(.top, debate.verdict != nil ? 40 : 28)
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(debate.phases.enumerated()), id: \.element.id) { i, p in
-                                phaseSection(p, number: i + 1, last: i == debate.phases.count - 1)
-                                    .id("phase-\(p.id)")
-                            }
+                            .padding(.bottom, 16)
+                        ForEach(Array(debate.phases.enumerated()), id: \.element.id) { i, p in
+                            phaseRows(p, number: i + 1, last: i == debate.phases.count - 1)
                         }
-                        .padding(.top, 16)
                     }
 
                     Color.clear.frame(height: 1).id(Self.endID)
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 24)
                 .frame(maxWidth: 980, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
             // Si segue il dibattito come in una chat: a ogni nuovo round (e al verdetto) la vista
-            // scende all'inizio della nuova sezione, così si legge dall'inizio. Se l'utente scorre
-            // in su per rileggere, l'inseguimento si ferma finché non torna in fondo o preme il
-            // pulsante "Vai al round in corso". Solo lo scorrimento dell'utente cambia `following`:
-            // la crescita del contenuto non lo spegne.
-            .onScrollPhaseChange { _, new, context in
+            // scende all'inizio della nuova sezione, così si legge dall'inizio. Lo stato
+            // "agganciato" segue le regole della chat di Claude: basta scorrere in su di 2 punti
+            // per sganciarsi e rileggere, e si torna agganciati appena l'utente riporta la vista in
+            // fondo (nessuna soglia ampia, nessuna attesa della fine dello scorrimento). Solo lo
+            // scorrimento dell'utente cambia `following`: la crescita del contenuto e gli
+            // scorrimenti del programma non lo toccano.
+            .onScrollPhaseChange { _, new in
                 userScrolling = new == .interacting || new == .decelerating
-                let g = context.geometry
-                if new == .idle, g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120 { following = true }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
-                if userScrolling, new < old - 2 { following = false }
+            .onScrollGeometryChange(for: ScrollMetrics.self) { g in
+                ScrollMetrics(offset: g.contentOffset.y,
+                              distance: max(0, g.contentSize.height - g.visibleRect.maxY))
+            } action: { old, new in
+                let away = new.distance > 300
+                if away != awayFromBottom { awayFromBottom = away }
+                guard userScrolling else { return }
+                if new.offset < old.offset - 2 { following = false }
+                else if new.distance <= 2 { following = true }
             }
             .onChange(of: sectionKey) {
                 guard watchedLive, following else { return }
@@ -553,26 +566,51 @@ struct DebateView: View {
                     scrollToLatest(proxy)
                 }
             }
+            // Come nella chat di Claude: un pulsante rotondo con la freccia, in basso al centro,
+            // compare quando non si è in fondo (dal vivo: quando ci si è sganciati).
             .overlay(alignment: .bottom) {
-                if debate.isRunning && !following {
+                let live = debate.isRunning
+                let show = live ? !following : awayFromBottom
+                ZStack {
+                if show {
+                    let up = live && debate.judging
+                    let title = live ? (up ? L("Vai al verdetto") : L("Vai al round in corso")) : L("Vai in fondo")
                     Button {
-                        following = true
-                        scrollToLatest(proxy)
+                        if live {
+                            following = true
+                            scrollToLatest(proxy)
+                        } else if reduceMotion {
+                            proxy.scrollTo(Self.endID, anchor: .bottom)
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.endID, anchor: .bottom) }
+                        }
                     } label: {
-                        Label(debate.judging ? L("Vai al verdetto") : L("Vai al round in corso"), systemImage: debate.judging ? "arrow.up" : "arrow.down")
+                        Image(systemName: up ? "arrow.up" : "arrow.down")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 22, height: 22)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.circle)
                     .controlSize(.large)
-                    .shadow(radius: 4, y: 1)
+                    .background(Circle().fill(.background))
+                    .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+                    .help(title)
+                    .accessibilityLabel(title)
                     .padding(.bottom, 18)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: show)
             }
         }
     }
 
     private static let endID = "debate-end"
+
+    private struct ScrollMetrics: Equatable {
+        var offset: CGFloat
+        var distance: CGFloat
+    }
 
     /// Cambia a ogni nuovo round, all'inizio del giudizio e all'arrivo del verdetto.
     private var sectionKey: String {
@@ -802,7 +840,7 @@ struct DebateView: View {
 
             Rectangle().fill(Brand.hairline).frame(height: 1).accessibilityHidden(true)
 
-            MarkdownView(text)
+            MarkdownView(text, lazy: true)
                 .frame(maxWidth: 720, alignment: .leading)
                 .padding(.horizontal, 22)
                 .padding(.top, 18)
@@ -866,49 +904,48 @@ struct DebateView: View {
     }
 
     /// Tappa del percorso: numero su una linea verticale, intestazione cliccabile, card sotto.
-    private func phaseSection(_ p: PhaseState, number: Int, last: Bool) -> some View {
+    /// Restituisce più righe (intestazione + una riga per coppia di card) perché la pila pigra
+    /// costruisca solo quelle visibili; la linea del percorso è disegnata riga per riga.
+    @ViewBuilder
+    private func phaseRows(_ p: PhaseState, number: Int, last: Bool) -> some View {
         let open = isExpanded(p.id)
         let state = store.phaseState(p, in: debate)
         let toggle = {
             if reduceMotion { setExpanded(p.id, !open) }
             else { withAnimation(.easeOut(duration: 0.18)) { setExpanded(p.id, !open) } }
         }
-        return HStack(alignment: .top, spacing: 14) {
-            StepMarker(number: number, state: state, reduceMotion: reduceMotion)
-            VStack(alignment: .leading, spacing: 0) {
-                Button(action: toggle) {
-                    PhaseHeader(eyebrow: store.phaseEyebrow(p.id, in: debate),
-                                name: CouncilStore.phaseNames[p.id] ?? p.title,
-                                description: CouncilStore.phaseDescriptions[p.id],
-                                note: p.note, state: state, meta: phaseMeta(p, state),
-                                expanded: open, canExpand: !p.cards.isEmpty,
-                                reduceMotion: reduceMotion)
-                }
-                .buttonStyle(PhaseHeaderStyle())
-                .disabled(p.cards.isEmpty)
-                .accessibilityValue(p.cards.isEmpty ? "" : open ? L("espanso") : L("compresso"))
-                .help(p.cards.isEmpty ? "" : open ? L("Comprimi la fase") : L("Espandi la fase"))
+        // Card per riga: due se la colonna delle card (contenuto meno numero e spazio) è larga.
+        let cols = contentWidth - 42 >= 652 ? 2 : 1
+        let rows = open && !p.cards.isEmpty
+            ? stride(from: 0, to: p.cards.count, by: cols).map { Array(p.cards[$0..<min($0 + cols, p.cards.count)]) }
+            : []
+        let gap: CGFloat = last ? 0 : 22
 
-                if open && !p.cards.isEmpty {
-                    CardsGrid(cards: p.cards, running: debate.isRunning, since: p.startedAt)
-                        .padding(.top, 10)
-                        .transition(.opacity)
-                }
+        TimelineRow(line: !last, lineTop: 34, bottom: rows.isEmpty ? gap : 0) {
+            StepMarker(number: number, state: state, reduceMotion: reduceMotion)
+        } content: {
+            Button(action: toggle) {
+                PhaseHeader(eyebrow: store.phaseEyebrow(p.id, in: debate),
+                            name: CouncilStore.phaseNames[p.id] ?? p.title,
+                            description: CouncilStore.phaseDescriptions[p.id],
+                            note: p.note, state: state, meta: phaseMeta(p, state),
+                            expanded: open, canExpand: !p.cards.isEmpty,
+                            reduceMotion: reduceMotion)
             }
-            .padding(.bottom, last ? 0 : 22)
-            // Altezza piena del contenuto: nell'HStack le card non devono finire sopra l'intestazione.
-            .fixedSize(horizontal: false, vertical: true)
+            .buttonStyle(PhaseHeaderStyle())
+            .disabled(p.cards.isEmpty)
+            .accessibilityValue(p.cards.isEmpty ? "" : open ? L("espanso") : L("compresso"))
+            .help(p.cards.isEmpty ? "" : open ? L("Comprimi la fase") : L("Espandi la fase"))
         }
-        // Linea del percorso: dal numero di questa tappa fino alla successiva.
-        .background(alignment: .topLeading) {
-            if !last {
-                Rectangle()
-                    .fill(Brand.hairline)
-                    .frame(width: 2)
-                    .padding(.top, 34)
-                    .padding(.leading, 13)
-                    .accessibilityHidden(true)
+        .id("phase-\(p.id)")
+
+        ForEach(Array(rows.enumerated()), id: \.element.first?.id) { i, row in
+            TimelineRow(line: !last, lineTop: 0, top: i == 0 ? 10 : 12, bottom: i == rows.count - 1 ? gap : 0) {
+                Color.clear.frame(width: 28, height: 0)
+            } content: {
+                CardsRow(cards: row, cols: cols, running: debate.isRunning, since: p.startedAt)
             }
+            .transition(.opacity)
         }
     }
 
@@ -1216,31 +1253,58 @@ private struct StepsRow: View {
 
 // MARK: - Card di un modello
 
-/// Card di un round su due colonne (una se la finestra è stretta). A differenza di LazyVGrid
-/// le card della stessa riga hanno la stessa altezza: niente vuoti sotto la più corta.
-private struct CardsGrid: View {
-    let cards: [CardState]
-    let running: Bool
-    let since: Date?
-    @State private var width: CGFloat = 0
+/// Riga del percorso: colonna con numero (o vuota) e linea verticale, contenuto a destra.
+/// La linea copre anche i margini della riga, così le righe di una fase la rendono continua.
+private struct TimelineRow<Marker: View, Content: View>: View {
+    let line: Bool
+    let lineTop: CGFloat
+    var top: CGFloat = 0
+    var bottom: CGFloat = 0
+    @ViewBuilder var marker: Marker
+    @ViewBuilder var content: Content
 
     var body: some View {
-        let cols = width >= 652 ? 2 : 1
-        let rows = stride(from: 0, to: cards.count, by: cols).map { Array(cards[$0..<min($0 + cols, cards.count)]) }
-        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
-            ForEach(rows.indices, id: \.self) { i in
-                GridRow {
-                    ForEach(rows[i]) { c in
-                        CardView(card: c, running: running, since: since)
-                    }
-                    if rows[i].count < cols {
-                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                    }
-                }
+        HStack(alignment: .top, spacing: 14) {
+            marker
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Altezza piena del contenuto: le card non devono finire sopra l'intestazione.
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, top)
+        .padding(.bottom, bottom)
+        .background(alignment: .topLeading) {
+            if line {
+                Rectangle()
+                    .fill(Brand.hairline)
+                    .frame(width: 2)
+                    .padding(.top, lineTop)
+                    .padding(.leading, 13)
+                    .accessibilityHidden(true)
             }
         }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+/// Una riga di card (due colonne, una se la finestra è stretta). Le card della stessa riga
+/// hanno la stessa altezza: niente vuoti sotto la più corta.
+private struct CardsRow: View {
+    let cards: [CardState]
+    let cols: Int
+    let running: Bool
+    let since: Date?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ForEach(cards) { c in
+                CardView(card: c, running: running, since: since)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            if cards.count < cols {
+                Color.clear.frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, idealHeight: 0, maxHeight: 0)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

@@ -355,6 +355,7 @@
 "Vai a: %@" = "Go to: %@";
 "Vai al round in corso" = "Go to Current Round";
 "Vai al verdetto" = "Go to Verdict";
+"Vai in fondo" = "Scroll to Bottom";
 "Vai alla fase" = "Go to the phase";
 "Verdetto" = "Verdict";
 "Verdetto copiato" = "Verdict copied";
