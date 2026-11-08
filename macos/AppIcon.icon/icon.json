@@ -6,17 +6,17 @@
     {
       "layers": [
         {
-          "glass": true,
+          "glass": false,
           "image-name": "dot-blue.svg",
           "name": "dot-blue"
         },
         {
-          "glass": true,
+          "glass": false,
           "image-name": "dot-green.svg",
           "name": "dot-green"
         },
         {
-          "glass": true,
+          "glass": false,
           "image-name": "dot-amber.svg",
           "name": "dot-amber"
         }
@@ -25,7 +25,7 @@
         "kind": "neutral",
         "opacity": 0.5
       },
-      "specular": true,
+      "specular": false,
       "translucency": {
         "enabled": false,
         "value": 0.5
