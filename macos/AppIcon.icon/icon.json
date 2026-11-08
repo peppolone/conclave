@@ -1,0 +1,55 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-gray:1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "dot-blue.svg",
+          "name": "dot-blue"
+        },
+        {
+          "glass": true,
+          "image-name": "dot-green.svg",
+          "name": "dot-green"
+        },
+        {
+          "glass": true,
+          "image-name": "dot-amber.svg",
+          "name": "dot-amber"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass": false,
+          "image-name": "lines.svg",
+          "name": "lines"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.25
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

@@ -22,8 +22,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/server"
 
 echo "→ Compilazione Swift (${ARCHS[*]})"
-# Tutti i file Swift dell'app (render-icon.swift è uno strumento di build a parte).
-SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift | grep -v render-icon.swift)}")
+# Tutti i file Swift dell'app.
+SOURCES=("${(@f)$(ls "$ROOT"/macos/*.swift)}")
 SLICES=()
 for a in "${ARCHS[@]}"; do
   xcrun swiftc -O -target "$a-apple-macos26.0" "${SOURCES[@]}" -o "$TMP/Conclave-$a" -framework AppKit
@@ -49,25 +49,15 @@ echo "→ Copia del motore"
 cp -R "$ROOT/src" "$APP/Contents/Resources/server/"
 cp "$ROOT/models.json" "$ROOT/.env.example" "$ROOT/package.json" "$APP/Contents/Resources/server/"
 
-echo "→ Colore d'accento"
-# AccentColor del marchio per i controlli di sistema (interruttori, pulsanti predefiniti): serve Xcode (actool).
-xcrun actool "$ROOT/macos/Assets.xcassets" --compile "$APP/Contents/Resources" \
-  --platform macosx --minimum-deployment-target 26.0 --accent-color AccentColor \
+echo "→ Icona e colore d'accento"
+# Icona nel formato di macOS 26 (AppIcon.icon, Icon Composer): il sistema aggiunge vetro, riflessi e
+# le varianti scura e tinta. actool la compila in Assets.car insieme all'AccentColor del marchio
+# (interruttori, pulsanti predefiniti) e produce AppIcon.icns per chi legge solo CFBundleIconFile.
+xcrun actool "$ROOT/macos/AppIcon.icon" "$ROOT/macos/Assets.xcassets" --compile "$APP/Contents/Resources" \
+  --platform macosx --minimum-deployment-target 26.0 --app-icon AppIcon --accent-color AccentColor \
   --output-partial-info-plist "$TMP/assets.plist" --output-format human-readable-text >/dev/null
-[[ -f "$APP/Contents/Resources/Assets.car" ]] || { echo "compilazione Assets.xcassets fallita"; exit 1; }
-
-echo "→ Icona"
-xcrun swiftc -O "$ROOT/macos/render-icon.swift" -o "$TMP/render-icon" -framework AppKit
-SRC="$TMP/AppIcon.png"
-"$TMP/render-icon" "$ROOT/macos/AppIcon.svg" "$SRC" 1024
-[[ -f "$SRC" ]] || { echo "rendering icona fallito"; exit 1; }
-ICONSET="$TMP/AppIcon.iconset"
-mkdir -p "$ICONSET"
-for s in 16 32 128 256 512; do
-  sips -z $s $s "$SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-  sips -z $((s*2)) $((s*2)) "$SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+[[ -f "$APP/Contents/Resources/Assets.car" && -f "$APP/Contents/Resources/AppIcon.icns" ]] \
+  || { echo "compilazione di icona e Assets.xcassets fallita"; exit 1; }
 
 echo "→ Info.plist"
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -81,6 +71,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHumanReadableCopyright</key><string>© 2026 peppolone — MIT License</string>
   <key>CFBundleExecutable</key><string>Conclave</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
