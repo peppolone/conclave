@@ -421,16 +421,20 @@ func renderInlineMarkdown(_ raw: String) -> AttributedString {
 struct MarkdownView: View {
     let text: String
     var baseFont: Font = .body
+    /// Blocchi costruiti solo quando si avvicinano alla parte visibile (testi lunghi dentro una
+    /// pila pigra, es. il verdetto). Mai dentro viste con `fixedSize`: lì serve l'altezza intera.
+    var lazy = false
     private let blocks: [MarkdownBlock]
 
-    init(_ text: String, baseFont: Font = .body) {
+    init(_ text: String, baseFont: Font = .body, lazy: Bool = false) {
         self.text = text
         self.baseFont = baseFont
+        self.lazy = lazy
         self.blocks = cachedMarkdownBlocks(text)
     }
 
     var body: some View {
-        MarkdownBlocksStack(blocks: blocks, baseFont: baseFont)
+        MarkdownBlocksStack(blocks: blocks, baseFont: baseFont, lazy: lazy)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -439,12 +443,19 @@ struct MarkdownView: View {
 private struct MarkdownBlocksStack: View {
     let blocks: [MarkdownBlock]
     let baseFont: Font
+    var lazy = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                MarkdownBlockView(block: block, baseFont: baseFont)
-            }
+        if lazy {
+            LazyVStack(alignment: .leading, spacing: 8) { rows }
+        } else {
+            VStack(alignment: .leading, spacing: 8) { rows }
+        }
+    }
+
+    private var rows: some View {
+        ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            MarkdownBlockView(block: block, baseFont: baseFont)
         }
     }
 }
