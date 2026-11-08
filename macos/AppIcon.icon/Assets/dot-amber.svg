@@ -1,16 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0.35" y2="1">
-      <stop offset="0" stop-color="#ffe08a"/>
-      <stop offset="0.55" stop-color="#f5b544"/>
-      <stop offset="1" stop-color="#e8871a"/>
-    </linearGradient>
-    <radialGradient id="h" cx="0.36" cy="0.3" r="0.5">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <circle cx="728" cy="668" r="150" fill="url(#g)"/>
-  <circle cx="728" cy="668" r="150" fill="url(#h)"/>
-  <circle cx="728" cy="668" r="146" fill="none" stroke="#e8871a" stroke-opacity="0.45" stroke-width="8"/>
+  <circle cx="694" cy="660" r="104" fill="#f5b544"/>
 </svg>
