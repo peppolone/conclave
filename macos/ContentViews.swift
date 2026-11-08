@@ -470,6 +470,10 @@ struct DebateView: View {
     /// true quando la vista è lontana dal fondo (più di 300 punti). Solo un booleano: cambia di
     /// rado, mentre la distanza cambierebbe a ogni scatto e ricalcolerebbe tutta la vista.
     @State private var awayFromBottom = false
+    /// Agganciato in fondo (dibattito concluso), come `isPinned` della chat di Claude: finché vale,
+    /// ogni cambio di altezza del contenuto riporta subito in fondo ("resnap"). Serve perché la
+    /// pila pigra stima le altezze delle righe non ancora costruite e il primo salto può sbagliare.
+    @State private var pinnedBottom = false
     /// Larghezza della colonna del contenuto: decide le card per riga.
     @State private var contentWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -550,13 +554,19 @@ struct DebateView: View {
             }
             .onScrollGeometryChange(for: ScrollMetrics.self) { g in
                 ScrollMetrics(offset: g.contentOffset.y,
-                              distance: max(0, g.contentSize.height - g.visibleRect.maxY))
+                              distance: max(0, g.contentSize.height - g.visibleRect.maxY),
+                              height: g.contentSize.height)
             } action: { old, new in
                 let away = new.distance > 300
                 if away != awayFromBottom { awayFromBottom = away }
-                guard userScrolling else { return }
-                if new.offset < old.offset - 2 { following = false }
-                else if new.distance <= 2 { following = true }
+                if userScrolling {
+                    if new.offset < old.offset - 2 { following = false; pinnedBottom = false }
+                    else if new.distance <= 2 { following = true; pinnedBottom = true }
+                } else if pinnedBottom, !debate.isRunning, new.distance > 2 || new.height != old.height {
+                    // Resnap di Claude: agganciati in fondo, si resta in fondo anche quando le
+                    // righe appena costruite hanno un'altezza diversa da quella stimata.
+                    proxy.scrollTo(Self.endID, anchor: .bottom)
+                }
             }
             .onChange(of: sectionKey) {
                 guard watchedLive, following else { return }
@@ -579,10 +589,10 @@ struct DebateView: View {
                         if live {
                             following = true
                             scrollToLatest(proxy)
-                        } else if reduceMotion {
-                            proxy.scrollTo(Self.endID, anchor: .bottom)
                         } else {
-                            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.endID, anchor: .bottom) }
+                            // Come `scrollToBottom` di Claude: salto immediato e aggancio.
+                            pinnedBottom = true
+                            proxy.scrollTo(Self.endID, anchor: .bottom)
                         }
                     } label: {
                         Image(systemName: up ? "arrow.up" : "arrow.down")
@@ -610,6 +620,7 @@ struct DebateView: View {
     private struct ScrollMetrics: Equatable {
         var offset: CGFloat
         var distance: CGFloat
+        var height: CGFloat
     }
 
     /// Cambia a ogni nuovo round, all'inizio del giudizio e all'arrivo del verdetto.
@@ -840,7 +851,7 @@ struct DebateView: View {
 
             Rectangle().fill(Brand.hairline).frame(height: 1).accessibilityHidden(true)
 
-            MarkdownView(text, lazy: true)
+            MarkdownView(text)
                 .frame(maxWidth: 720, alignment: .leading)
                 .padding(.horizontal, 22)
                 .padding(.top, 18)
@@ -939,12 +950,16 @@ struct DebateView: View {
         }
         .id("phase-\(p.id)")
 
-        ForEach(Array(rows.enumerated()), id: \.element.first?.id) { i, row in
+        // Identità che cambia con le colonne: passando da 1 a 2 card per riga la pila pigra non
+        // deve riusare l'altezza misurata per la riga a card singola (il testo uscirebbe dalla card).
+        ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+            let key = "\(p.id)-\(cols)-\(i)"
             TimelineRow(line: !last, lineTop: 0, top: i == 0 ? 10 : 12, bottom: i == rows.count - 1 ? gap : 0) {
                 Color.clear.frame(width: 28, height: 0)
             } content: {
                 CardsRow(cards: row, cols: cols, running: debate.isRunning, since: p.startedAt)
             }
+            .id(key)
             .transition(.opacity)
         }
     }
@@ -1295,16 +1310,21 @@ private struct CardsRow: View {
     let since: Date?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ForEach(cards) { c in
-                CardView(card: c, running: running, since: since)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-            if cards.count < cols {
-                Color.clear.frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, idealHeight: 0, maxHeight: 0)
+        // Grid e non HStack: misura il testo alla larghezza finale della colonna, mentre l'HStack
+        // con fixedSize poteva stimare un'altezza più bassa e far uscire il testo dalla card.
+        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 0) {
+            GridRow {
+                ForEach(cards) { c in
+                    CardView(card: c, running: running, since: since)
+                }
+                if cards.count < cols {
+                    Color.clear
+                        .frame(minWidth: 0, maxWidth: .infinity)
+                        .gridCellUnsizedAxes(.vertical)
+                }
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 }
 
