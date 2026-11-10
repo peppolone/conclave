@@ -1,5 +1,5 @@
 import "./bootstrap.ts";
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, renameSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { familyOf, AUTO } from "./family.ts";
@@ -14,6 +14,13 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const DATA_DIR = process.env.COUNCIL_DATA ?? ROOT;
 
 if (existsSync(join(DATA_DIR, ".env"))) process.loadEnvFile(join(DATA_DIR, ".env"));
+
+/** Scrive il file per intero o per niente: un crash a metà non lascia un JSON troncato. */
+export function writeFileAtomic(path: string, text: string): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, text);
+  renameSync(tmp, path);
+}
 
 export interface Provider {
   baseUrl: string;
@@ -115,7 +122,7 @@ if (!process.env.COUNCIL_MODELS && existsSync(SELECTION_FILE)) {
   const v = toVoices(selection.models);
   selection.models = v.models;
   // La scelta dell'utente salvata nel vecchio formato (più varianti per famiglia) viene convertita.
-  if (v.changed && fromFile) { try { writeFileSync(SELECTION_FILE, JSON.stringify(selection, null, 2) + "\n"); } catch { /* resta in memoria */ } }
+  if (v.changed && fromFile) { try { writeFileAtomic(SELECTION_FILE, JSON.stringify(selection, null, 2) + "\n"); } catch { /* resta in memoria */ } }
 }
 config.models = selection.models;
 
@@ -140,7 +147,7 @@ export function validateSelection(input: unknown): Selection {
 }
 
 export function saveSelection(s: Selection): void {
-  writeFileSync(SELECTION_FILE, JSON.stringify(s, null, 2) + "\n");
+  writeFileAtomic(SELECTION_FILE, JSON.stringify(s, null, 2) + "\n");
 }
 
 /** Un modello è utilizzabile se è Claude (abbonamento) o se la chiave del suo provider è impostata. */

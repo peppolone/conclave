@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,12 @@ import { redact } from "../redact.ts";
 // Cartella vuota come cwd: Claude non vede file di progetto.
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "conclave-"));
 const TIMEOUT_MS = 240_000;
+
+/** Processi `claude` in corso: alla chiusura del motore vanno fermati, o continuano a consumare l'abbonamento. */
+const children = new Set<ChildProcess>();
+export function killClaudeChildren(): void {
+  for (const c of children) c.kill("SIGTERM");
+}
 
 /**
  * Chiama Claude Code in modalità non interattiva usando l'abbonamento Pro.
@@ -34,7 +40,9 @@ export function chatClaude(model: string, req: ChatRequest): Promise<ChatResult>
     const child = spawn("claude", args, { cwd: SANDBOX_DIR, env, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
-    const timer = setTimeout(() => child.kill("SIGTERM"), TIMEOUT_MS);
+    let timedOut = false;
+    children.add(child);
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, TIMEOUT_MS);
     const onAbort = () => child.kill("SIGTERM");
     req.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -42,11 +50,15 @@ export function chatClaude(model: string, req: ChatRequest): Promise<ChatResult>
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => {
       clearTimeout(timer);
+      children.delete(child);
       reject(new Error(`claude non avviabile: ${e.message}`));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      children.delete(child);
       req.signal?.removeEventListener("abort", onAbort);
+      // Fermato da noi: l'output vuoto non è un errore di Claude ma un tempo scaduto.
+      if (timedOut) return reject(Object.assign(new Error(`Claude: nessuna risposta entro ${TIMEOUT_MS / 1000} s`), { name: "TimeoutError" }));
       try {
         const j = JSON.parse(out) as { result?: string; is_error?: boolean };
         if (j.is_error || typeof j.result !== "string") {

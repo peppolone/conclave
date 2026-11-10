@@ -94,7 +94,9 @@ export function parseChanges(text: string): "nessuno" | "minori" | "sostanziali"
 
 /** Toglie dal verdetto la riga "TITOLO: ..." e la restituisce come titolo della discussione. */
 export function splitTitle(text: string): { title: string | null; verdict: string } {
-  const m = text.match(/^\s*\**\s*(?:TITOLO|TITLE)\s*:\s*\**\s*(.+?)\s*\**\s*$/im);
+  // Tutto sulla stessa riga ([ \t], non \s): un "TITOLO:" vuoto non deve prendersi la riga dopo.
+  // Ammessi "#" e ">" davanti: qualche giudice scrive il titolo come intestazione.
+  const m = text.match(/^[ \t]*[#>]*[ \t]*\**[ \t]*(?:TITOLO|TITLE)[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.*?)[ \t]*\**[ \t]*$/im);
   if (!m || m.index! > 200) return { title: null, verdict: text };
   const title = m[1].replace(/^["'«“#\s]+|["'»”.\s]+$/g, "").slice(0, 80) || null;
   const verdict = (text.slice(0, m.index) + text.slice(m.index! + m[0].length)).replace(/^\s+/, "");

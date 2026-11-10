@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 
 export const MODELS = [
   "ok-a", "ok-b", "hang", "slow", "ratelimit", "quota", "crash500",
-  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm", "leaky",
+  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm", "leaky", "titleonly",
 ];
 
 /** Chiave Google finta (formato reale) che "leaky" ripete nei suoi errori. */
@@ -162,6 +162,10 @@ async function handle(req, res) {
       const key = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
       return send(res, 401, err(`Incorrect API key provided: ${key}. Also tried ${FAKE_GOOGLE_KEY} (Authorization: Bearer ${key}).`, "invalid_request_error"));
     }
+    case "titleonly":
+      // Da giudice scrive solo la riga del titolo: il verdetto resta vuoto.
+      if (phaseOf(system, user) === "verdict") return send(res, 200, completion(model, "TITOLO: Solo il titolo"));
+      return send(res, 200, completion(model, okText(model, user)));
     case "gone":
       return send(res, 404, err(`The model \`${model}\` does not exist or you do not have access to it. model not found`, "invalid_request_error"));
     default:

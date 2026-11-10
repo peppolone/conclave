@@ -1,8 +1,8 @@
 // Controllo all'avvio: verifica quali modelli del consiglio rispondono e, con la scelta
 // automatica attiva, sostituisce quelli fuori uso con il migliore disponibile dello stesso provider.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { config, selection, isAvailable, DATA_DIR, saveSelection, type ModelDef } from "./config.ts";
+import { config, selection, isAvailable, DATA_DIR, saveSelection, writeFileAtomic, type ModelDef } from "./config.ts";
 import { listCatalog, probe, familyChain } from "./catalog.ts";
 import { AUTO, familyOf } from "./family.ts";
 
@@ -73,7 +73,7 @@ function replaceForever(m: ModelDef, model: string, label: string): void {
   try { saveSelection(selection); } catch { /* resta valido almeno per questa sessione */ }
 }
 
-async function checkOne(m: ModelDef, _taken: Set<string>): Promise<void> {
+async function checkOne(m: ModelDef): Promise<void> {
   if (!isAvailable(m)) { health.set(m.id, { status: "nokey" }); return; }
   health.set(m.id, { status: "checking" });
   const provider = m.provider!;
@@ -121,7 +121,7 @@ async function checkOne(m: ModelDef, _taken: Set<string>): Promise<void> {
  * Sostituzione presa dal catalogo (non una riserva dichiarata): non va in cache,
  * così al prossimo avvio si ricontrolla e, se il modello è ritirato, si rende definitiva.
  */
-function isTemporary(_m: ModelDef, h: Health): boolean {
+function isTemporary(h: Health): boolean {
   // Esiti senza catena (vecchio formato della cache) si ricontrollano.
   return !h.chain;
 }
@@ -150,12 +150,12 @@ function writeCache(): void {
   for (const m of config.models) {
     if (m.kind !== "openai") continue;
     const h = health.get(m.id);
-    if (h?.status !== "ok" || isTemporary(m, h)) continue;
+    if (h?.status !== "ok" || isTemporary(h)) continue;
     // Conserva la data della prova originale se l'esito arrivava già dalla memoria.
     const prev = old[m.id];
     out[m.id] = { sig: signature(m), at: prev && prev.sig === signature(m) && cachedIds.has(m.id) ? prev.at : now, health: h };
   }
-  try { writeFileSync(CACHE_FILE, JSON.stringify(out, null, 2)); } catch { /* non essenziale */ }
+  try { writeFileAtomic(CACHE_FILE, JSON.stringify(out, null, 2)); } catch { /* non essenziale */ }
 }
 
 const cachedIds = new Set<string>();
@@ -168,17 +168,14 @@ export function runHealthCheck(force = false): Promise<void> {
   if (running) return running;
   const cache = force ? {} : readCache();
   cachedIds.clear();
-  const taken = new Set<string>();
-  for (const m of config.models) if (m.kind === "openai") taken.add(`${m.provider}/${m.model}`);
   // Per provider in sequenza (limiti di frequenza), provider diversi in parallelo.
   const byProvider = new Map<string, ModelDef[]>();
   for (const m of config.models) {
     if (m.kind === "claude-cli") { health.set(m.id, { status: "ok" }); continue; }
     const c = cache[m.id];
-    if (c && c.sig === signature(m) && Date.now() - c.at < CACHE_TTL && isAvailable(m) && !isTemporary(m, c.health)) {
+    if (c && c.sig === signature(m) && Date.now() - c.at < CACHE_TTL && isAvailable(m) && !isTemporary(c.health)) {
       health.set(m.id, c.health);
       cachedIds.add(m.id);
-      if (c.health.using) taken.add(`${m.provider}/${c.health.using}`);
       continue;
     }
     const list = byProvider.get(m.provider!) ?? [];
@@ -186,8 +183,8 @@ export function runHealthCheck(force = false): Promise<void> {
     byProvider.set(m.provider!, list);
   }
   running = Promise.all(
-    [...byProvider.values()].map(async (list) => { for (const m of list) await checkOne(m, taken); }),
-  ).then(() => { writeCache(); running = null; });
+    [...byProvider.values()].map(async (list) => { for (const m of list) await checkOne(m); }),
+  ).then(writeCache).finally(() => { running = null; });
   return running;
 }
 

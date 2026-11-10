@@ -68,8 +68,10 @@ export function createDebate(question: string, models: string[], options: Stored
 }
 
 export function saveMessage(debateId: number, m: MessageRow): void {
-  db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms, model_used, replaced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null);
+  // Solo se il dibattito esiste ancora: una risposta arrivata dopo l'eliminazione non lascia righe orfane.
+  db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms, model_used, replaced)
+              SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM debates WHERE id = ?)`)
+    .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null, debateId);
 }
 
 export function finishDebate(id: number, status: string, verdict: string | null, title: string | null = null): void {

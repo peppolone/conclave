@@ -7,6 +7,7 @@ import { listCatalog, probe } from "./catalog.ts";
 import { getHealth, runHealthCheck, isChecking } from "./health.ts";
 import { engineToken } from "./bootstrap.ts";
 import { redact, redactProcessOutput } from "./redact.ts";
+import { killClaudeChildren } from "./adapters/claude-cli.ts";
 
 redactProcessOutput();
 
@@ -42,13 +43,25 @@ function authorized(req: IncomingMessage): boolean {
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
+/** Un errore imprevisto in un lavoro in background si registra: non deve chiudere il motore. */
+const logError = (what: string) => (e: unknown) => console.error(`Errore (${what}): ${(e as Error)?.message ?? e}`);
+
 async function readBody(req: IncomingMessage): Promise<unknown> {
   let s = "";
+  // Decodifica continua: un carattere accentato a cavallo di due pacchetti non si rovina.
+  req.setEncoding("utf8");
   for await (const chunk of req) {
     s += chunk;
     if (s.length > 100_000) throw new BadRequest(413, "richiesta troppo grande");
   }
   try { return JSON.parse(s || "{}"); } catch { throw new BadRequest(400, "JSON non valido"); }
+}
+
+/** Corpo JSON che deve essere un oggetto (non null, non elenco). */
+async function readObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const b = await readBody(req);
+  if (b === null || typeof b !== "object" || Array.isArray(b)) throw new BadRequest(400, "corpo della richiesta non valido");
+  return b as Record<string, unknown>;
 }
 
 function send(r: Running, e: DebateEvent) {
@@ -102,8 +115,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (req.method === "POST" && path === "/api/probe") {
     if (!isJsonPost()) return json(res, 415, { error: "serve JSON" });
-    const b = (await readBody(req)) as { provider?: string; model?: string };
-    if (!b.provider || !b.model) return json(res, 400, { error: "provider e model obbligatori" });
+    const b = await readObject(req);
+    if (typeof b.provider !== "string" || typeof b.model !== "string" || !b.provider || !b.model) return json(res, 400, { error: "provider e model obbligatori" });
     return json(res, 200, await probe(b.provider, b.model));
   }
 
@@ -122,7 +135,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (req.method === "POST" && path === "/api/health") {
     if (!isJsonPost()) return json(res, 415, { error: "serve JSON" });
-    runHealthCheck(true); // richiesta esplicita: riprova davvero i modelli
+    runHealthCheck(true).catch(logError("controllo dei modelli")); // richiesta esplicita: riprova davvero i modelli
     return json(res, 202, { ok: true });
   }
 
@@ -130,11 +143,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (req.method === "POST" && path === "/api/debates") {
     // Solo JSON: impedisce a pagine esterne di avviare dibattiti con un semplice form.
-    if (!String(req.headers["content-type"]).startsWith("application/json")) return json(res, 415, { error: "serve JSON" });
-    const body = (await readBody(req)) as {
+    if (!isJsonPost()) return json(res, 415, { error: "serve JSON" });
+    const body = (await readObject(req)) as {
       question?: string; models?: string[]; rounds?: unknown; claudeModel?: unknown; judge?: unknown; parentId?: unknown;
     };
-    if (body === null || typeof body !== "object" || Array.isArray(body)) return json(res, 400, { error: "corpo della richiesta non valido" });
     if (body.models !== undefined && !Array.isArray(body.models)) return json(res, 400, { error: "models deve essere un elenco" });
     const question = String(body.question ?? "").trim();
     if (question.length > 20_000) return json(res, 400, { error: "domanda troppo lunga (max 20.000 caratteri)" });
@@ -176,7 +188,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const r: Running = { events: [], clients: new Set(), controller: new AbortController() };
     running.set(id, r);
     const opts = { rounds: rounds as Rounds, judge: judgeDef, claudeModel, parentContext };
-    runDebate(id, question, defs, opts, (e) => send(r, e), r.controller.signal).finally(() => {
+    runDebate(id, question, defs, opts, (e) => send(r, e), r.controller.signal).catch(logError(`dibattito ${id}`)).finally(() => {
       for (const c of r.clients) c.end();
       // Tiene gli eventi in memoria ancora un po' per chi si ricollega.
       setTimeout(() => running.delete(id), 60_000);
@@ -201,7 +213,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
     if (req.method === "POST" && sub === "/cancel") {
       // Solo JSON: una pagina esterna non può annullare un dibattito con un semplice form.
-      if (!String(req.headers["content-type"]).startsWith("application/json")) return json(res, 415, { error: "serve JSON" });
+      if (!isJsonPost()) return json(res, 415, { error: "serve JSON" });
       running.get(id)?.controller.abort();
       return json(res, 200, { ok: true });
     }
@@ -240,11 +252,20 @@ createServer((req, res) => {
       const h = getHealth(m.id);
       console.log(`  ${m.label}: ${h.status}${h.note ? ` — ${h.note}` : ""}`);
     }
-  });
+  }).catch(logError("controllo dei modelli"));
 });
+
+/** Chiusura ordinata: ferma i dibattiti e i processi `claude` ancora in corso, poi esce. */
+function shutdown() {
+  for (const r of running.values()) r.controller.abort();
+  killClaudeChildren();
+  process.exit(0);
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 // Avviato dall'app Mac: se l'app si chiude (anche per crash) lo stdin si chiude e il server termina.
 if (process.env.COUNCIL_PARENT === "app") {
   process.stdin.resume();
-  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("end", shutdown);
 }

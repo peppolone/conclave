@@ -84,6 +84,21 @@ export async function runDebate(
 
   const alive = () => ds.filter((d) => d.alive);
 
+  /**
+   * Esegue una chiamata con un tempo massimo. L'errore che ne esce è già pronto da mostrare:
+   * tempo scaduto riconosciuto dal segnale (non dal testo: "504 Gateway Timeout" è un errore
+   * del provider, non un nostro tempo scaduto) e chiavi mascherate.
+   */
+  async function withBudget<T>(ms: number, run: (budget: AbortSignal) => Promise<T>): Promise<T> {
+    const timeout = AbortSignal.timeout(ms);
+    try {
+      return await run(AbortSignal.any([signal, timeout]));
+    } catch (e) {
+      const timedOut = timeout.aborted || (e as Error).name === "TimeoutError";
+      throw new Error(timedOut ? `nessuna risposta entro ${ms / 1000} s` : redact((e as Error).message));
+    }
+  }
+
   /** Esegue una fase in parallelo su tutti i partecipanti ancora attivi. */
   async function phase(name: Phase, build: (d: Debater) => string, store: (d: Debater, t: string) => void,
                        keep?: (d: Debater) => void) {
@@ -92,15 +107,13 @@ export async function runDebate(
       alive().map(async (d) => {
         try {
           // Ogni intervento ha un tempo massimo: un modello bloccato non ferma il dibattito.
-          const budget = AbortSignal.any([signal, AbortSignal.timeout(PARTICIPANT_BUDGET_MS)]);
-          const r = await chat(d.def, { system: P.SYSTEM_DEBATER, user: build(d), signal: budget });
+          const r = await withBudget(PARTICIPANT_BUDGET_MS, (budget) => chat(d.def, { system: P.SYSTEM_DEBATER, user: build(d), signal: budget }));
           store(d, r.text);
           saveMessage(debateId, { model_id: d.def.id, phase: name, content: r.text, error: null, ms: r.ms, model_used: r.model, replaced: r.replaced });
           emit({ type: "message", phase: name, modelId: d.def.id, text: r.text, ms: r.ms, model: r.model, replaced: r.replaced });
         } catch (e) {
           if (signal.aborted) return;
-          const raw = (e as Error).name === "TimeoutError" || /abort|timeout/i.test((e as Error).message)
-            ? `nessuna risposta entro ${PARTICIPANT_BUDGET_MS / 1000} s` : redact((e as Error).message);
+          const raw = (e as Error).message;
           // Senza risposta iniziale il modello esce; nei round successivi salta il round,
           // mantiene la posizione precedente e rientra nel round dopo.
           let error = raw;
@@ -120,7 +133,7 @@ export async function runDebate(
     // Fase iniziale: risposte indipendenti.
     await phase("initial", () => P.initialPrompt(question, parent), (d, t) => (d.initial = t));
 
-    if (opts.rounds >= 1 && alive().length < 2) {
+    if (opts.rounds >= 1 && alive().length === 1) {
       // Da soli non si discute: si va direttamente al verdetto, e lo si dice.
       emit({ type: "phase", phase: "critique", note: "Round saltati: ha risposto un solo modello, non c'è nessuno con cui discutere." });
       saveMessage(debateId, { model_id: "_note", phase: "critique", content: "Round saltati: ha risposto un solo modello.", error: null, ms: null });
@@ -145,7 +158,10 @@ export async function runDebate(
           // Arresto anticipato: se nessuno ha cambiato nulla, il round 3 non aggiunge valore.
           const changes = alive().map((d) => P.parseChanges(d.revised ?? ""));
           if (alive().length >= 2 && changes.every((c) => c === "nessuno")) {
-            emit({ type: "phase", phase: "final", note: "Round 3 saltato: nessun partecipante ha cambiato posizione." });
+            const note = "Round 3 saltato: nessun partecipante ha cambiato posizione.";
+            emit({ type: "phase", phase: "final", note });
+            // Salvata come le altre note: riaprendo la discussione si vede perché manca il round.
+            saveMessage(debateId, { model_id: "_note", phase: "final", content: note, error: null, ms: null });
             for (const d of alive()) d.final = d.revised;
           } else {
             await phase("final", (d) => P.finalPrompt(question, d.revised!, others(d, (x) => x.revised)), (d, t) => (d.final = t),
@@ -173,9 +189,10 @@ export async function runDebate(
     let title: string | null = null;
     for (const j of judges) {
       try {
-        const budget = AbortSignal.any([signal, AbortSignal.timeout(JUDGE_BUDGET_MS)]);
-        const r = await chat(j, { system: P.SYSTEM_JUDGE, user: judgeUser, maxTokens: 8192, signal: budget });
+        const r = await withBudget(JUDGE_BUDGET_MS, (budget) => chat(j, { system: P.SYSTEM_JUDGE, user: judgeUser, maxTokens: 8192, signal: budget }));
         const split = P.splitTitle(r.text);
+        // Solo la riga del titolo, niente verdetto: si prova il giudice successivo.
+        if (!split.verdict.trim()) throw new Error("verdetto vuoto");
         title = split.title;
         verdict = j.id === chosenJudge.id ? split.verdict : `> Giudice di riserva: ${j.label} (${chosenJudge.label} non disponibile)\n\n${split.verdict}`;
         saveMessage(debateId, { model_id: `judge:${j.id}`, phase: "verdict", content: verdict, error: null, ms: r.ms });
@@ -183,7 +200,7 @@ export async function runDebate(
         break;
       } catch (e) {
         if (signal.aborted) throw new Error("cancelled");
-        const error = redact((e as Error).message);
+        const error = (e as Error).message;
         saveMessage(debateId, { model_id: `judge:${j.id}`, phase: "verdict", content: null, error, ms: null });
         emit({ type: "error", phase: "verdict", modelId: `judge:${j.id}`, error });
       }

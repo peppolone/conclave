@@ -6,6 +6,8 @@
 
 import { spawn } from "node:child_process";
 import { request } from "node:http";
+import { connect } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, writeFile, stat, readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -438,7 +440,110 @@ SCENARIOS.q = async function q() {
   return [true, "database, WAL e file del motore solo per l'utente", secs];
 };
 
+// Corpo con accenti spezzato a metà carattere tra due pacchetti; corpi "null" → 400, mai 500.
+SCENARIOS.r = async function r() {
+  const started = Date.now();
+  const question = `[scenario:r] Perché l'università è così? ${"àèìòù€ ".repeat(40)}`;
+  const body = Buffer.from(JSON.stringify({ question, models: ["ok-a", "ok-b"], rounds: 0, judge: "ok-a", claudeModel: "sonnet" }));
+  const cut = body.indexOf(Buffer.from("€")) + 1; // dentro i 3 byte di "€"
+  const text = await new Promise((resolve, reject) => {
+    const sock = connect(enginePort, "127.0.0.1", () => {
+      sock.write(`POST /api/debates HTTP/1.1\r\nHost: 127.0.0.1:${enginePort}\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n`);
+      sock.write(body.subarray(0, cut));
+      setTimeout(() => sock.write(body.subarray(cut)), 150);
+    });
+    let s = "";
+    sock.setEncoding("utf8");
+    sock.on("data", (c) => (s += c));
+    sock.on("end", () => resolve(s));
+    sock.on("error", reject);
+  });
+  const secs = () => (Date.now() - started) / 1000;
+  const id = Number(text.match(/"id":(\d+)/)?.[1]);
+  if (!id) return [false, `dibattito non creato: ${text.slice(0, 80)}`, secs()];
+  const saved = (await api("GET", `/api/debates/${id}`)).body?.question;
+  if (saved !== question.trim()) return [false, `domanda alterata (${[...(saved ?? "")].filter((c) => c === "\ufffd").length} caratteri rovinati)`, secs()];
+  const wrong = [];
+  for (const [method, path] of [["POST", "/api/probe"], ["PUT", "/api/selection"], ["POST", "/api/debates"]]) {
+    for (const raw of ["null", "[]", '"x"']) {
+      const x = await api(method, path, { body: raw, raw: true, headers: { "Content-Type": "application/json" } });
+      if (x.status !== 400) wrong.push(`${method} ${path} ${raw} → ${x.status}`);
+    }
+  }
+  if (wrong.length) return [false, wrong.join("; "), secs()];
+  return [true, "domanda intatta, 9 corpi non-oggetto respinti con 400", secs()];
+};
+
+// Eliminare un dibattito in corso: sparisce, non restano righe orfane, il motore resta vivo.
+SCENARIOS.s = async function s() {
+  const started = Date.now();
+  const c = await api("POST", "/api/debates", { body: { question: QUESTION("s"), models: ["ok-a", "slow"], rounds: 1, judge: "ok-a", claudeModel: "sonnet" } });
+  const id = c.body?.id;
+  await new Promise((res) => setTimeout(res, 1000));
+  const d = await api("DELETE", `/api/debates/${id}`);
+  await new Promise((res) => setTimeout(res, 1500));
+  const g = await api("GET", `/api/debates/${id}`);
+  const db = new DatabaseSync(join(dataDir, "data", "council.db"), { readOnly: true });
+  const orphans = db.prepare("SELECT count(*) AS n FROM messages WHERE debate_id = ?").get(id).n;
+  db.close();
+  const secs = (Date.now() - started) / 1000;
+  if (d.status !== 200 || g.status !== 404) return [false, `DELETE ${d.status}, poi GET ${g.status}`, secs];
+  if (orphans) return [false, `${orphans} messaggi orfani dopo l'eliminazione`, secs];
+  if (engine.exitCode !== null) return [false, "motore terminato", secs];
+  return [true, "eliminato a metà: GET 404, nessun messaggio orfano", secs];
+};
+
+// Chi si scollega e si ricollega a metà riceve di nuovo tutti gli eventi dall'inizio.
+SCENARIOS.t = async function t() {
+  const started = Date.now();
+  const c = await api("POST", "/api/debates", { body: { question: QUESTION("t"), models: ["ok-a", "slow"], rounds: 0, judge: "ok-a", claudeModel: "sonnet" } });
+  const id = c.body?.id;
+  const first = await followEvents(id, 2000);
+  const second = await followEvents(id, 60_000);
+  const secs = (Date.now() - started) / 1000;
+  if (!first.timedOut) return [false, "il dibattito è finito prima dello scollegamento", secs];
+  if (second.events[0]?.type !== "start") return [false, `il replay non riparte da start (${second.events[0]?.type})`, secs];
+  if (second.events.length < first.events.length) return [false, "replay più corto degli eventi già visti", secs];
+  if (doneEvent(second.events)?.status !== "done") return [false, `nessun done dopo il ricollegamento`, secs];
+  return [true, `ricollegato: ${second.events.length} eventi da start a done`, secs];
+};
+
+// Riga del titolo: solo in testa e sulla sua riga, senza mangiare il verdetto.
+SCENARIOS.u = async function u() {
+  const { splitTitle } = await import("../../src/debate/prompts.ts");
+  const cases = [
+    ["TITOLO: Treno o aereo\n\n## Verdetto\nTesto", "Treno o aereo", "## Verdetto\nTesto"],
+    ["**TITLE:** Train or plane\nText", "Train or plane", "Text"],
+    ["**TITOLO**: Grassetto fuori\nTesto", "Grassetto fuori", "Testo"],
+    ["## TITOLO: Con cancelletto\nTesto", "Con cancelletto", "Testo"],
+    ["TITOLO:\n## Risposta\nTesto", null, "## Risposta\nTesto"],
+    ["Nessun titolo qui.\nTesto", null, "Nessun titolo qui.\nTesto"],
+    [`${"x".repeat(300)}\nTITOLO: Tardi\nTesto`, null, `${"x".repeat(300)}\nTITOLO: Tardi\nTesto`],
+  ];
+  const wrong = cases.filter(([input, title, verdict]) => {
+    const r = splitTitle(input);
+    return r.title !== title || r.verdict !== verdict;
+  }).map(([input]) => JSON.stringify(input.slice(0, 30)));
+  if (wrong.length) return [false, `casi sbagliati: ${wrong.join(", ")}`, 0];
+  return [true, `${cases.length} casi di titolo corretti`, 0];
+};
+
+// Giudice che scrive solo il titolo: il verdetto vuoto non si accetta, decide la riserva.
+SCENARIOS.v = async function v() {
+  const max = 60;
+  const r = await debate("v", ["ok-a", "ok-b"], 0, "titleonly", max * 1000);
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const row = verdictRow(r.state);
+  if (!row || row.model_id === "judge:titleonly") return [false, `verdetto accettato da ${row?.model_id}`, r.secs];
+  const failed = (r.state.messages ?? []).find((m) => m.model_id === "judge:titleonly" && m.error);
+  if (!failed) return [false, "nessun errore registrato per il giudice a verdetto vuoto", r.secs];
+  return [true, `verdetto vuoto scartato (${failed.error}), deciso da ${row.model_id}`, r.secs];
+};
+
 const DESCR = {
+  r: "corpo spezzato e corpi non-oggetto", s: "eliminazione a dibattito in corso", t: "SSE: ricollegamento a metà",
+  u: "riga del titolo", v: "giudice con verdetto vuoto",
   p: "chiavi e token mai visibili", q: "permessi dei file dati",
   n: "voce resta sulla riserva", o: "limite token in uscita (OTPM)",
   m: "voce di famiglia: riserva se il principale si blocca",
