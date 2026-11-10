@@ -52,6 +52,10 @@ enum Engine {
     /// Segreto di questa sessione dell'app, mandato al motore sullo stdin (mai nell'ambiente):
     /// senza, il motore risponde 401 a qualunque altro processo o pagina web.
     static let token: String = {
+        // Solo nelle prove (cartella dati alternativa): token scelto da chi lancia l'app, per
+        // poter avviare un dibattito via API e guardarlo nell'interfaccia.
+        let env = ProcessInfo.processInfo.environment
+        if !(env["COUNCIL_DATA"] ?? "").isEmpty, let t = env["COUNCIL_TEST_TOKEN"], t.count >= 32 { return t }
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
             fatalError("Generatore casuale di sistema non disponibile")
@@ -64,6 +68,26 @@ enum Engine {
         var req = URLRequest(url: url, timeoutInterval: timeout)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return req
+    }
+
+    static func url(_ port: Int, _ path: String) -> URL? {
+        port > 0 ? URL(string: "http://127.0.0.1:\(port)\(path)") : nil
+    }
+
+    /// Chiamata all'API del motore. Una risposta ≥ 400 diventa un errore con il messaggio del motore.
+    static func call(_ port: Int, _ method: String, _ path: String, body: Data? = nil, timeout: TimeInterval = 60) async throws -> Data {
+        guard let u = url(port, path) else { throw URLError(.cannotConnectToHost) }
+        var req = request(u, timeout: timeout)
+        req.httpMethod = method
+        // Il motore accetta le richieste che cambiano stato solo come JSON, anche senza corpo.
+        if method != "GET" { req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        req.httpBody = body
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
+            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
+        }
+        return data
     }
 }
 
@@ -104,6 +128,12 @@ final class ServerController {
     private var log: FileHandle?
     private var buffer = ""
     private var stopping = false
+    private var output: Pipe?
+    /// Porta già letta: il resto dell'output va solo nel registro.
+    private var portFound = false
+    /// Cambia a ogni start/stop: un avvio ancora in preparazione (lettura del PATH) superato da
+    /// un riavvio non deve lanciare un secondo motore.
+    private var generation = 0
 
     var onReady: ((Int) -> Void)?
     var onCrash: ((String) -> Void)?
@@ -148,6 +178,9 @@ final class ServerController {
     func start() {
         stopping = false
         buffer = ""
+        portFound = false
+        generation += 1
+        let generation = generation
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let path = Self.loginPath()
@@ -158,7 +191,10 @@ final class ServerController {
                 DispatchQueue.main.async { self.onCrash?(L("Node.js non trovato. Installalo (es. con nvm) e riapri l'app.")) }
                 return
             }
-            DispatchQueue.main.async { self.launch(node: node, path: path) }
+            DispatchQueue.main.async {
+                guard generation == self.generation else { return }
+                self.launch(node: node, path: path)
+            }
         }
     }
 
@@ -180,6 +216,7 @@ final class ServerController {
 
         let input = Pipe()
         let output = Pipe()
+        self.output = output
         p.standardInput = input
         p.standardOutput = output
         p.standardError = output
@@ -215,16 +252,22 @@ final class ServerController {
     }
 
     private func consume(_ text: String) {
+        guard !portFound else { return }
         buffer += text
         // Si attende il fine riga: un blocco letto dalla pipe può troncare il numero a metà.
         guard let range = buffer.range(of: #"COUNCIL_PORT=(\d+)\n"#, options: .regularExpression) else { return }
         let port = Int(buffer[range].split(separator: "=")[1].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         buffer = ""
+        portFound = true
         if port > 0 { onReady?(port) }
     }
 
     func stop() {
         stopping = true
+        generation += 1
+        // Niente più scritture nel registro dopo la sua chiusura.
+        output?.fileHandleForReading.readabilityHandler = nil
+        output = nil
         try? stdinPipe?.fileHandleForWriting.close()
         process?.terminate()
         process?.waitUntilExit()
@@ -253,6 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     private lazy var sidebar = SidebarModel(port: { [weak self] in self?.port ?? 0 })
     private lazy var store = CouncilStore(port: { [weak self] in self?.port ?? 0 })
     private var port = 0
+    /// Impostazioni salvate durante un dibattito: il motore si riavvia quando finisce.
+    private var restartPending = false
     /// Verdetti arrivati mentre l'app era in secondo piano (badge del Dock).
     private var unreadVerdicts = 0
     /// nil = autorizzazione alle notifiche non ancora chiesta in questa sessione.
@@ -271,8 +316,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         AppAppearance.apply()
         buildMenu()
         buildWindow()
-        settings.model.onSaved = { [weak self] in self?.restartServer(nil) }
-        settings.models.onSaved = { [weak self] in self?.restartServer(nil) }
+        settings.model.onSaved = { [weak self] in self?.settingsSaved() }
+        settings.models.onSaved = { [weak self] in self?.settingsSaved() }
         // Primo avvio senza chiavi: apre subito le impostazioni con la guida.
         if !settings.hasAnyKey { settings.show() }
 
@@ -283,6 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         }
         server.onCrash = { [weak self] message in self?.showCrash(message) }
         server.start()
+        Task { await UpdateCheck.run(manual: false, over: window) }
         updateStatusItem()
         NotificationCenter.default.addObserver(forName: MenuBarPreference.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatusItem() }
@@ -322,7 +368,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             saveFile: { [weak self] name, text in self?.saveMarkdown(filename: name, text: text) })
         content = NSHostingView(rootView: root)
         content.isHidden = true
-        store.onHistoryChanged = { [weak self] in self?.sidebar.reload() }
+        store.onHistoryChanged = { [weak self] in
+            self?.sidebar.reload()
+            // Dopo l'evento in corso: lo stato "in corso" si aggiorna subito dopo questa chiamata.
+            DispatchQueue.main.async { self?.restartIfPending() }
+        }
         store.onCurrentChanged = { [weak self] id in self?.sidebar.selected = id }
         store.onVerdictReady = { [weak self] q in
             self?.verdictReady(title: L("Verdetto pronto"), body: q.count > 80 ? String(q.prefix(80)) + "…" : q)
@@ -363,7 +413,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             guard let self else { return }
             Task { await self.store.open(id) }
         }
-        sidebar.onDeleted = { [weak self] id in self?.store.deleted(id) }
+        sidebar.onDeleted = { [weak self] id in
+            self?.store.deleted(id)
+            // Era il dibattito che teneva in sospeso il riavvio per le nuove impostazioni.
+            self?.restartIfPending()
+        }
         sidebar.onExport = { [weak self] id in self?.exportDiscussion(id) }
         sidebar.onNew = { [weak self] in self?.newDebate(nil) }
         sidebar.onSettings = { [weak self] in self?.openSettings(nil) }
@@ -578,6 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
         let app = NSMenu()
         app.addItem(withTitle: L("Informazioni su Conclave"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        app.addItem(item(L("Controlla aggiornamenti…"), #selector(checkForUpdates(_:)), ""))
         app.addItem(.separator())
         app.addItem(item(L("Impostazioni…"), #selector(openSettings(_:)), ","))
         app.addItem(item(L("Apri cartella dati"), #selector(openDataFolder(_:)), ""))
@@ -596,15 +651,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         app.addItem(.separator())
         app.addItem(withTitle: L("Esci da Conclave"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
-        let file = NSMenu(title: L("Archivio"))
+        // Nomi e posizioni delle voci come in Note e Mail (letti dai loro MainMenu.nib).
+        let file = NSMenu(title: L("File"))
         file.addItem(item(L("Nuova discussione"), #selector(newDebate(_:)), "n"))
         file.addItem(.separator())
-        file.addItem(withTitle: L("Chiudi finestra"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.addItem(withTitle: L("Chiudi"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.addItem(.separator())
+        file.addItem(item(L("Esporta come Markdown…"), #selector(exportDebate(_:)), "e", [.command, .shift]))
 
         let edit = NSMenu(title: L("Modifica"))
         // "Annulla" è anche il pulsante Cancel: chiave distinta per l'inglese "Undo".
         edit.addItem(withTitle: NSLocalizedString("menu.undo", value: "Annulla", comment: ""), action: Selector(("undo:")), keyEquivalent: "z")
-        edit.addItem(withTitle: L("Ripeti"), action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(withTitle: L("Ripristina"), action: Selector(("redo:")), keyEquivalent: "Z")
         edit.addItem(.separator())
         edit.addItem(withTitle: L("Taglia"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: L("Copia"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -623,11 +681,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         let view = NSMenu(title: L("Vista"))
         // L'etichetta diventa "Mostra…" o "Nascondi…" in validateMenuItem.
         view.addItem(item(L("Nascondi barra laterale"), #selector(toggleSidebar(_:)), "s", [.command, .control]))
+        // AppKit cambia da solo l'etichetta in "Mostra…" quando la barra è nascosta.
+        view.addItem(withTitle: L("Nascondi barra strumenti"), action: #selector(NSWindow.toggleToolbarShown(_:)), keyEquivalent: "t")
+            .keyEquivalentModifierMask = [.command, .option]
         view.addItem(withTitle: L("Personalizza la barra strumenti…"), action: #selector(NSWindow.runToolbarCustomizationPalette(_:)), keyEquivalent: "")
+        view.addItem(.separator())
+        // Testo di risposte e verdetto.
+        view.addItem(item(L("Ingrandisci"), #selector(zoomTextIn(_:)), "+"))
+        view.addItem(item(L("Riduci"), #selector(zoomTextOut(_:)), "-"))
+        view.addItem(item(L("Dimensioni reali"), #selector(zoomTextReset(_:)), "0"))
         view.addItem(.separator())
         view.addItem(item(L("Ricarica"), #selector(reload(_:)), "r"))
         view.addItem(.separator())
-        view.addItem(withTitle: L("Modalità a tutto schermo"), action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        view.addItem(withTitle: L("Attiva modalità a tutto schermo"), action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
             .keyEquivalentModifierMask = [.command, .control]
 
         // Menu dell'app: comandi della discussione (disattivati quando non applicabili).
@@ -636,12 +702,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         debate.addItem(item(L("Interrompi"), #selector(stopDebate(_:)), "."))
         debate.addItem(.separator())
         debate.addItem(item(L("Copia verdetto"), #selector(copyVerdict(_:)), "c", [.command, .shift]))
-        debate.addItem(item(L("Esporta come Markdown…"), #selector(exportDebate(_:)), "e", [.command, .shift]))
         debate.addItem(item(L("Approfondisci…"), #selector(deepenDebate(_:)), "d"))
 
         let win = NSMenu(title: L("Finestra"))
         win.addItem(withTitle: L("Contrai"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        win.addItem(withTitle: L("Zoom"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        win.addItem(withTitle: L("Ridimensiona"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         win.addItem(.separator())
         win.addItem(withTitle: L("Porta tutto in primo piano"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         NSApp.windowsMenu = win
@@ -652,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         help.addItem(item(L("Mostra registro del motore"), #selector(openLog(_:)), ""))
         NSApp.helpMenu = help
 
-        for (title, menu) in [("Conclave", app), (L("Archivio"), file), (L("Modifica"), edit), (L("Vista"), view),
+        for (title, menu) in [("Conclave", app), (L("File"), file), (L("Modifica"), edit), (L("Vista"), view),
                               (L("Discussione"), debate), (L("Finestra"), win), (L("Aiuto"), help)] {
             let top = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             top.submenu = menu
@@ -673,6 +738,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         sidebar.selected = nil
         store.newDiscussion()
     }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        Task { await UpdateCheck.run(manual: true, over: window) }
+    }
+
+    @objc func zoomTextIn(_ sender: Any?) { TextZoom.step(1) }
+    @objc func zoomTextOut(_ sender: Any?) { TextZoom.step(-1) }
+    @objc func zoomTextReset(_ sender: Any?) { TextZoom.reset() }
 
     @objc func toggleSidebar(_ sender: Any?) {
         split.toggleSidebar(sender)
@@ -719,6 +792,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         if store.current?.id == id { exportDebate(nil); return }
         Task {
             await store.open(id)
+            // Apertura non riuscita o superata da un altro clic: mai esportare un'altra discussione.
+            guard store.current?.id == id else { NSSound.beep(); return }
             exportDebate(nil)
         }
     }
@@ -747,6 +822,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             return d?.verdict != nil
         case #selector(deepenDebate(_:)):
             return d != nil && d?.isRunning == false
+        case #selector(zoomTextIn(_:)):
+            return TextZoom.canGrow
+        case #selector(zoomTextOut(_:)):
+            return TextZoom.canShrink
+        case #selector(zoomTextReset(_:)):
+            return !TextZoom.isDefault
         default:
             return true
         }
@@ -922,7 +1003,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         w.makeKeyAndOrderFront(nil)
     }
 
+    /// Le nuove impostazioni valgono dal riavvio del motore, che però interrompe i dibattiti in corso.
+    private func settingsSaved() {
+        guard store.hasRunning else { restartServer(nil); return }
+        let alert = NSAlert()
+        alert.messageText = L("Una discussione è in corso")
+        alert.informativeText = L("Le nuove impostazioni valgono dal riavvio del motore, che interrompe la discussione in corso.")
+        alert.addButton(withTitle: L("Applica al termine"))
+        alert.addButton(withTitle: L("Riavvia ora"))
+        if alert.runModal() == .alertSecondButtonReturn { restartServer(nil) } else { restartPending = true }
+    }
+
+    private func restartIfPending() {
+        guard restartPending, !store.hasRunning else { return }
+        restartServer(nil)
+    }
+
     @objc func restartServer(_ sender: Any?) {
+        restartPending = false
         content.isHidden = true
         store.engineStopped()
         loading.isHidden = false

@@ -65,7 +65,7 @@
 "Apri la pagina delle chiavi di %@" = "Open the %@ keys page";
 "Apri la piattaforma OpenAI e aggiungi credito in “Billing”." = "Open the OpenAI platform and add credit in “Billing”.";
 "Apri su GitHub" = "Open on GitHub";
-"Archivio" = "File";
+"File" = "File";
 "Aspetto" = "Appearance";
 "Automatico (consigliato)" = "Automatic (recommended)";
 "Avvia" = "Start";
@@ -92,7 +92,7 @@
 "Chiave non valida" = "Invalid key";
 "Chiavi API" = "API Keys";
 "Chiavi, scelta dei modelli e cronologia delle discussioni" = "Keys, model selection and discussion history";
-"Chiudi finestra" = "Close Window";
+"Chiudi" = "Close";
 "Chiusura" = "Closing";
 "Chiusura · %@" = "Closing · %@";
 "Ciao, nottambulo" = "Hello, night owl";
@@ -217,7 +217,7 @@
 "Manca la chiave" = "Key missing";
 "Manda una richiesta minima per vedere se risponde con il tuo account" = "Sends a minimal request to see whether it responds with your account";
 "Migliore: %@" = "Best: %@";
-"Modalità a tutto schermo" = "Enter Full Screen";
+"Attiva modalità a tutto schermo" = "Enter Full Screen";
 "Modelli" = "Models";
 "Modelli GPT ufficiali di OpenAI" = "Official OpenAI GPT models";
 "Modelli gratuiti “:free” (per esempio Nemotron e DeepSeek)" = "Free “:free” models (for example Nemotron and DeepSeek)";
@@ -303,7 +303,7 @@
 "Ricarica catalogo" = "Reload Catalog";
 "Rimuovi" = "Remove";
 "Rimuovi dal consiglio" = "Remove from Council";
-"Ripeti" = "Redo";
+"Ripristina" = "Redo";
 "Riprova" = "Try Again";
 "Risponde" = "Responding";
 "Risponde in %@ s" = "Responds in %@ s";
@@ -372,7 +372,7 @@
 "Voce Mistral Small" = "Mistral Small voice";
 "Voci GPT-OSS e Qwen" = "GPT-OSS and Qwen voices";
 "Voci del consiglio" = "Council voices";
-"Zoom" = "Zoom";
+"Ridimensiona" = "Zoom";
 "aspetto tema chiaro scuro sistema carattere font lingua language accesso login avvio barra dei menu" = "appearance theme light dark system font typeface language accesso login startup menu bar aspetto tema chiaro scuro lingua";
 "chiave chiavi api provider gemini groq openrouter mistral cerebras openai gratis" = "key keys api provider gemini groq openrouter mistral cerebras openai free chiave chiavi gratis";
 "compresso" = "collapsed";
@@ -399,3 +399,22 @@
 "Mostra meno" = "Show less";
 "Mostra tutta la domanda" = "Show full question";
 "Cerca nelle discussioni (⌘F)" = "Search discussions (⌘F)";
+"Una discussione è in corso" = "A discussion is in progress";
+"Le nuove impostazioni valgono dal riavvio del motore, che interrompe la discussione in corso." = "The new settings take effect when the engine restarts, which stops the discussion in progress.";
+"Applica al termine" = "Apply When It Ends";
+"Controlla aggiornamenti…" = "Check for Updates…";
+"Nascondi barra strumenti" = "Hide Toolbar";
+"Ingrandisci" = "Zoom In";
+"Riduci" = "Zoom Out";
+"Dimensioni reali" = "Actual Size";
+"Aggiornamenti" = "Updates";
+"Controlla gli aggiornamenti" = "Check for updates";
+"Una volta a settimana Conclave chiede a GitHub se c'è una versione nuova e ti avvisa. Non installa nulla da solo e non invia dati." = "Once a week Conclave asks GitHub whether a new version exists and lets you know. It never installs anything by itself and sends no data.";
+"Impossibile controllare gli aggiornamenti" = "Unable to check for updates";
+"Conclave è aggiornato" = "Conclave is up to date";
+"La versione %@ è la più recente." = "Version %@ is the latest.";
+"È disponibile Conclave %@" = "Conclave %@ is available";
+"Hai la versione %@." = "You have version %@.";
+"Scarica" = "Download";
+"Più tardi" = "Later";
+"Salta questa versione" = "Skip This Version";

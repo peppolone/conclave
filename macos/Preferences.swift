@@ -77,6 +77,43 @@ enum LoginItem {
     }
 }
 
+/// Dimensione del testo di risposte e verdetto (Vista ▸ Ingrandisci / Riduci / Dimensioni reali).
+enum TextZoom {
+    static let key = "TextZoom"
+    private static let steps: [Double] = [0.85, 1, 1.15, 1.3, 1.5, 1.75]
+
+    static var value: Double {
+        let v = UserDefaults.standard.double(forKey: key)
+        return v == 0 ? 1 : v
+    }
+
+    private static var index: Int {
+        steps.enumerated().min { abs($0.element - value) < abs($1.element - value) }?.offset ?? 1
+    }
+
+    static var canGrow: Bool { index < steps.count - 1 }
+    static var canShrink: Bool { index > 0 }
+    static var isDefault: Bool { value == 1 }
+
+    static func step(_ by: Int) {
+        UserDefaults.standard.set(steps[min(max(index + by, 0), steps.count - 1)], forKey: key)
+    }
+
+    static func reset() { UserDefaults.standard.set(1.0, forKey: key) }
+}
+
+private struct TextZoomKey: EnvironmentKey {
+    static let defaultValue = 1.0
+}
+
+extension EnvironmentValues {
+    /// Ingrandimento del testo scelto dall'utente, letto dal renderer Markdown.
+    var textZoom: Double {
+        get { self[TextZoomKey.self] }
+        set { self[TextZoomKey.self] = newValue }
+    }
+}
+
 /// Icona nella barra dei menu: la mostra o la toglie l'AppDelegate quando cambia.
 enum MenuBarPreference {
     static let key = "ShowInMenuBar"

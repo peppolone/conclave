@@ -421,20 +421,18 @@ func renderInlineMarkdown(_ raw: String) -> AttributedString {
 struct MarkdownView: View {
     let text: String
     var baseFont: Font = .body
-    /// Blocchi costruiti solo quando si avvicinano alla parte visibile (testi lunghi dentro una
-    /// pila pigra, es. il verdetto). Mai dentro viste con `fixedSize`: lì serve l'altezza intera.
-    var lazy = false
     private let blocks: [MarkdownBlock]
+    @AppStorage(TextZoom.key) private var zoom = 1.0
 
-    init(_ text: String, baseFont: Font = .body, lazy: Bool = false) {
+    init(_ text: String, baseFont: Font = .body) {
         self.text = text
         self.baseFont = baseFont
-        self.lazy = lazy
         self.blocks = cachedMarkdownBlocks(text)
     }
 
     var body: some View {
-        MarkdownBlocksStack(blocks: blocks, baseFont: baseFont, lazy: lazy)
+        MarkdownBlocksStack(blocks: blocks, baseFont: zoom == 1 ? baseFont : .system(size: NSFont.systemFontSize * zoom))
+            .environment(\.textZoom, zoom)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -443,19 +441,13 @@ struct MarkdownView: View {
 private struct MarkdownBlocksStack: View {
     let blocks: [MarkdownBlock]
     let baseFont: Font
-    var lazy = false
 
     var body: some View {
-        if lazy {
-            LazyVStack(alignment: .leading, spacing: 8) { rows }
-        } else {
-            VStack(alignment: .leading, spacing: 8) { rows }
-        }
-    }
-
-    private var rows: some View {
-        ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-            MarkdownBlockView(block: block, baseFont: baseFont)
+        // Mai pigra: dentro la pila pigra del dibattito una seconda pila pigra sbaglia le altezze.
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                MarkdownBlockView(block: block, baseFont: baseFont)
+            }
         }
     }
 }
@@ -463,6 +455,7 @@ private struct MarkdownBlocksStack: View {
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
     let baseFont: Font
+    @Environment(\.textZoom) private var zoom
 
     var body: some View {
         switch block {
@@ -515,6 +508,8 @@ private struct MarkdownBlockView: View {
     }
 
     private func headingFont(_ level: Int) -> Font {
+        // Con il testo ingrandito i titoli crescono nella stessa proporzione (17, 15 e 13 pt di base).
+        if zoom != 1, level <= 3 { return .system(size: [17, 15, 13][max(level, 1) - 1] * zoom, weight: .semibold) }
         switch level {
         case 1: return .title2.weight(.semibold)
         case 2: return .title3.weight(.semibold)
@@ -555,8 +550,10 @@ private struct MarkdownTableView: View {
     let header: [String]
     let rows: [[String]]
     let baseFont: Font
+    @Environment(\.textZoom) private var zoom
 
-    /// Larghezza stimata di ogni colonna in base al contenuto (min 60, max 280 pt).
+    /// Larghezza stimata di ogni colonna in base al contenuto (min 60, max 280 pt, in proporzione
+    /// al testo ingrandito: altrimenti le parole andrebbero a capo a metà).
     private var columnWidths: [CGFloat] {
         (0..<header.count).map { col in
             var longest = 0
@@ -565,7 +562,7 @@ private struct MarkdownTableView: View {
                     longest = max(longest, part.count)
                 }
             }
-            return min(max(CGFloat(longest) * 7 + 16, 60), 280)
+            return min(max(CGFloat(longest) * 7 * zoom + 16, 60 * zoom), 280 * zoom)
         }
     }
 

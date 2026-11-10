@@ -123,6 +123,9 @@ final class CouncilStore: ObservableObject {
     var expandedPhases: [Int: [String: Bool]] = [:]
 
     private var stream: Task<Void, Never>?
+    /// Dibattiti in corso non più mostrati: se ne attende la fine in background.
+    private var watchers: [Int: Task<Void, Never>] = [:]
+    private var openSeq = 0
     private var healthPoll: Task<Void, Never>?
     private var loadedPrefs = false
     private let defaults = UserDefaults.standard
@@ -140,27 +143,9 @@ final class CouncilStore: ObservableObject {
 
     // MARK: HTTP
 
-    private func url(_ path: String) -> URL? {
-        let p = port()
-        return p > 0 ? URL(string: "http://127.0.0.1:\(p)\(path)") : nil
-    }
-
     private func request(_ method: String, _ path: String, body: Any? = nil) async throws -> Data {
-        guard let u = url(path) else { throw URLError(.cannotConnectToHost) }
-        var req = Engine.request(u, timeout: 30)
-        req.httpMethod = method
-        if let body {
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        } else if method != "GET" {
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        }
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
-            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
-        }
-        return data
+        let data = try body.map { try JSONSerialization.data(withJSONObject: $0) }
+        return try await Engine.call(port(), method, path, body: data, timeout: 30)
     }
 
     private func json(_ data: Data) -> [String: Any] {
@@ -178,6 +163,9 @@ final class CouncilStore: ObservableObject {
     func engineStopped() {
         engineReady = false
         stream?.cancel()
+        // Il riavvio interrompe anche i dibattiti seguiti in background.
+        for w in watchers.values { w.cancel() }
+        watchers = [:]
     }
 
     func reloadModels() async {
@@ -306,23 +294,62 @@ final class CouncilStore: ObservableObject {
 
     private func listen(_ id: Int) {
         stream?.cancel()
+        watchers.removeValue(forKey: id)?.cancel()
         stream = Task { [weak self] in
-            guard let self, let u = self.url("/api/debates/\(id)/events") else { return }
+            guard let self, let u = Engine.url(self.port(), "/api/debates/\(id)/events") else { return }
             let req = Engine.request(u, timeout: 3600)
             do {
                 let (bytes, _) = try await URLSession.shared.bytes(for: req)
                 for try await line in bytes.lines {
                     if Task.isCancelled { return }
-                    guard line.hasPrefix("data: "), let d = line.dropFirst(6).data(using: .utf8),
-                          let e = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+                    guard let e = Self.event(line) else { continue }
                     self.apply(e, debateId: id)
                 }
-            } catch {
-                // Connessione chiusa (fine dibattito o riavvio): si rilegge lo stato salvato.
-                if !Task.isCancelled, self.current?.id == id, self.current?.isRunning == true { await self.open(id) }
-            }
+            } catch {}
+            // Flusso finito senza "done" (errore, 404, riavvio): si rilegge lo stato salvato,
+            // altrimenti la discussione resterebbe "in corso" per sempre.
+            guard !Task.isCancelled, self.current?.id == id, self.current?.isRunning == true else { return }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            // open() annulla il flusso della discussione mostrata, cioè questo task: lo si
+            // stacca prima, o la rilettura verrebbe annullata e resterebbe "in corso".
+            self.stream = nil
+            await self.open(id)
         }
     }
+
+    private static func event(_ line: String) -> [String: Any]? {
+        guard line.hasPrefix("data: "), let d = line.dropFirst(6).data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+    }
+
+    /// Chiude il flusso della discussione mostrata; se è ancora in corso la si segue in background,
+    /// così cronologia, notifica e badge arrivano anche guardando altro.
+    private func leaveCurrent() {
+        stream?.cancel()
+        if let d = current, d.isRunning { watch(d.id, title: d.displayTitle) }
+    }
+
+    private func watch(_ id: Int, title: String) {
+        guard watchers[id] == nil, let u = Engine.url(port(), "/api/debates/\(id)/events") else { return }
+        watchers[id] = Task { [weak self] in
+            var done: [String: Any]?
+            if let (bytes, _) = try? await URLSession.shared.bytes(for: Engine.request(u, timeout: 3600)) {
+                do {
+                    for try await line in bytes.lines {
+                        if let e = Self.event(line), e["type"] as? String == "done" { done = e; break }
+                    }
+                } catch {}
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.watchers[id] = nil
+            if done?["status"] as? String == "done" { self.onVerdictReady?(done?["title"] as? String ?? title) }
+            self.onHistoryChanged?()
+        }
+    }
+
+    /// true se un dibattito è in corso, mostrato o in background.
+    var hasRunning: Bool { current?.isRunning == true || !watchers.isEmpty }
 
     private func apply(_ e: [String: Any], debateId: Int) {
         guard var d = current, d.id == debateId, let type = e["type"] as? String else { return }
@@ -427,8 +454,11 @@ final class CouncilStore: ObservableObject {
     // MARK: Apertura, nuova discussione, annullamento
 
     func open(_ id: Int) async {
-        stream?.cancel()
-        guard let data = try? await request("GET", "/api/debates/\(id)") else { return }
+        if current?.id == id { stream?.cancel() } else { leaveCurrent() }
+        // Due aperture ravvicinate: vale solo l'ultima richiesta, anche se risponde prima l'altra.
+        openSeq += 1
+        let seq = openSeq
+        guard let data = try? await request("GET", "/api/debates/\(id)"), seq == openSeq else { return }
         let j = json(data)
         let status = j["status"] as? String ?? "done"
         let opts = j["options"] as? [String: Any]
@@ -486,7 +516,8 @@ final class CouncilStore: ObservableObject {
     }
 
     func newDiscussion() {
-        stream?.cancel()
+        leaveCurrent()
+        openSeq += 1
         current = nil
         parent = nil
         startError = nil
@@ -494,7 +525,12 @@ final class CouncilStore: ObservableObject {
     }
 
     func deleted(_ id: Int) {
-        if current?.id == id { newDiscussion() }
+        watchers.removeValue(forKey: id)?.cancel()
+        guard current?.id == id else { return }
+        // Niente da seguire in background: la discussione non esiste più.
+        stream?.cancel()
+        current = nil
+        newDiscussion()
     }
 
     func cancel() async {

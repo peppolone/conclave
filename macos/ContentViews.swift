@@ -1340,7 +1340,7 @@ private struct CardView: View {
                     Text(card.title).font(.headline)
                     Spacer(minLength: 6)
                     if let s = card.seconds {
-                        Text(String(format: "%.1f s", s))
+                        Text(String(format: "%.1f s", locale: AppLanguage.locale, s))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()

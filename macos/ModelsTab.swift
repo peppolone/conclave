@@ -101,33 +101,12 @@ final class ModelsModel: ObservableObject {
 
     init(port: @escaping () -> Int) { self.port = port }
 
-    private func url(_ path: String) -> URL? {
-        let p = port()
-        return p > 0 ? URL(string: "http://127.0.0.1:\(p)\(path)") : nil
-    }
-
     private func get<T: Decodable>(_ path: String, as: T.Type) async throws -> T {
-        guard let u = url(path) else { throw URLError(.cannotConnectToHost) }
-        let (data, resp) = try await URLSession.shared.data(for: Engine.request(u))
-        if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
-            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
-        }
-        return try JSONDecoder().decode(T.self, from: data)
+        try JSONDecoder().decode(T.self, from: await Engine.call(port(), "GET", path))
     }
 
     private func send(_ method: String, _ path: String, body: Data) async throws -> Data {
-        guard let u = url(path) else { throw URLError(.cannotConnectToHost) }
-        var req = Engine.request(u)
-        req.httpMethod = method
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = body
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
-            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-            throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
-        }
-        return data
+        try await Engine.call(port(), method, path, body: body)
     }
 
     func load() async {

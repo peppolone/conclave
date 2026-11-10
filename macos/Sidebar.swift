@@ -38,19 +38,13 @@ final class SidebarModel: ObservableObject {
 
     init(port: @escaping () -> Int) { self.port = port }
 
-    private func url(_ path: String) -> URL? {
-        let p = port()
-        return p > 0 ? URL(string: "http://127.0.0.1:\(p)\(path)") : nil
-    }
-
     func reload() {
         searchTask?.cancel()
         searchTask = Task {
             let q = query.trimmingCharacters(in: .whitespaces)
             var path = "/api/debates"
             if !q.isEmpty, let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) { path += "?q=\(enc)" }
-            guard let u = url(path),
-                  let (data, _) = try? await URLSession.shared.data(for: Engine.request(u)),
+            guard let data = try? await Engine.call(port(), "GET", path),
                   !Task.isCancelled,
                   let list = try? JSONDecoder().decode([DebateSummary].self, from: data) else { return }
             items = list
@@ -106,10 +100,8 @@ final class SidebarModel: ObservableObject {
 
     func delete(_ id: Int) {
         Task {
-            guard let u = url("/api/debates/\(id)") else { return }
-            var req = Engine.request(u)
-            req.httpMethod = "DELETE"
-            _ = try? await URLSession.shared.data(for: req)
+            // Eliminazione non riuscita: la riga resta, l'elenco si riallinea al motore.
+            guard (try? await Engine.call(port(), "DELETE", "/api/debates/\(id)")) != nil else { reload(); return }
             if selected == id { selected = nil }
             onDeleted?(id)
             reload()

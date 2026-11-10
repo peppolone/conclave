@@ -442,6 +442,7 @@ struct GeneralPage: View {
     @State private var openAtLogin = LoginItem.enabled || LoginItem.needsApproval
     @State private var loginError: String?
     @State private var menuBar = MenuBarPreference.enabled
+    @AppStorage(UpdateCheck.enabledKey) private var updates = true
 
     private var appearanceDetail: String {
         switch appearance {
@@ -499,6 +500,14 @@ struct GeneralPage: View {
                 SettingsRow(L("Mostra nella barra dei menu"),
                             detail: L("Icona di Conclave in alto a destra: nuova discussione, discussioni recenti e finestra principale. Chiudendo la finestra l'app resta attiva.")) {
                     Toggle(L("Mostra nella barra dei menu"), isOn: $menuBar)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+            }
+            SettingsSection(L("Aggiornamenti")) {
+                SettingsRow(L("Controlla gli aggiornamenti"),
+                            detail: L("Una volta a settimana Conclave chiede a GitHub se c'è una versione nuova e ti avvisa. Non installa nulla da solo e non invia dati.")) {
+                    Toggle(L("Controlla gli aggiornamenti"), isOn: $updates)
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
@@ -918,8 +927,13 @@ final class SettingsWindowController {
     func show(tab: SettingsTab? = nil) {
         if window == nil { window = makeWindow() }
         if let tab { nav.tab = tab }
-        model.reload()
-        Task { await models.load() }
+        // Finestra già aperta (⌘, o "Aggiungi modelli…"): ricaricare cancellerebbe una chiave
+        // appena incollata o una scelta di modelli non ancora salvata.
+        // Minimizzata conta come aperta: le modifiche non salvate sono ancora lì.
+        if window?.isVisible != true && window?.isMiniaturized != true {
+            model.reload()
+            Task { await models.load() }
+        }
         window?.makeKeyAndOrderFront(nil)
         // Nessun campo attivo all'apertura: né la ricerca della barra laterale né una chiave.
         window?.makeFirstResponder(nil)
