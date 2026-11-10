@@ -1,5 +1,6 @@
 import type { Provider } from "../config.ts";
 import type { ChatRequest, ChatResult } from "./types.ts";
+import { redact } from "../redact.ts";
 
 const TIMEOUT_MS = 120_000;
 const MAX_RETRIES = 2;
@@ -108,7 +109,7 @@ export async function once(p: Provider, model: string, req: ChatRequest, timeout
     } catch { /* risposta non JSON */ }
     const ra = Number(res.headers.get("retry-after"));
     const hinted = parseTryAgain(msg);
-    throw new HttpError(res.status, `HTTP ${res.status}: ${msg}`, Number.isFinite(ra) && ra > 0 ? ra : hinted);
+    throw new HttpError(res.status, `HTTP ${res.status}: ${redact(msg)}`, Number.isFinite(ra) && ra > 0 ? ra : hinted);
   }
 
   let j: any;

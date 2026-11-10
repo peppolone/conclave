@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatRequest, ChatResult } from "./types.ts";
+import { redact } from "../redact.ts";
 
 // Cartella vuota come cwd: Claude non vede file di progetto.
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "conclave-"));
@@ -54,7 +55,7 @@ export function chatClaude(model: string, req: ChatRequest): Promise<ChatResult>
         }
         resolve({ text: j.result.trim(), ms: Date.now() - started });
       } catch {
-        reject(new Error(`Claude (exit ${code}): ${(err || out).slice(0, 300) || "nessun output"}`));
+        reject(new Error(`Claude (exit ${code}): ${redact((err || out).slice(0, 300)) || "nessun output"}`));
       }
     });
     // Se claude esce prima di leggere tutto il prompt (annullamento, timeout, errore d'avvio)

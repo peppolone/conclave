@@ -2,6 +2,7 @@ import { config, type ModelDef } from "../config.ts";
 import { chat } from "../adapters/index.ts";
 import { saveMessage, finishDebate } from "../db.ts";
 import * as P from "./prompts.ts";
+import { redact } from "../redact.ts";
 
 export type Phase = "initial" | "critique" | "revise" | "final" | "verdict";
 
@@ -99,7 +100,7 @@ export async function runDebate(
         } catch (e) {
           if (signal.aborted) return;
           const raw = (e as Error).name === "TimeoutError" || /abort|timeout/i.test((e as Error).message)
-            ? `nessuna risposta entro ${PARTICIPANT_BUDGET_MS / 1000} s` : (e as Error).message;
+            ? `nessuna risposta entro ${PARTICIPANT_BUDGET_MS / 1000} s` : redact((e as Error).message);
           // Senza risposta iniziale il modello esce; nei round successivi salta il round,
           // mantiene la posizione precedente e rientra nel round dopo.
           let error = raw;
@@ -182,7 +183,7 @@ export async function runDebate(
         break;
       } catch (e) {
         if (signal.aborted) throw new Error("cancelled");
-        const error = (e as Error).message;
+        const error = redact((e as Error).message);
         saveMessage(debateId, { model_id: `judge:${j.id}`, phase: "verdict", content: null, error, ms: null });
         emit({ type: "error", phase: "verdict", modelId: `judge:${j.id}`, error });
       }
@@ -193,7 +194,7 @@ export async function runDebate(
     emit({ type: "done", status: "done", verdict, ...(title ? { title } : {}) });
   } catch (e) {
     const cancelled = signal.aborted;
-    const error = cancelled ? "Dibattito annullato" : (e as Error).message;
+    const error = cancelled ? "Dibattito annullato" : redact((e as Error).message);
     finishDebate(debateId, cancelled ? "cancelled" : "failed", null);
     emit({ type: "done", status: cancelled ? "cancelled" : "failed", error });
   }

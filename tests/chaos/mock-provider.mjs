@@ -7,11 +7,15 @@
 // automatica non cambia i modelli prima degli scenari. Sono contate a parte in /stats.
 
 import { createServer } from "node:http";
+import { pathToFileURL } from "node:url";
 
 export const MODELS = [
   "ok-a", "ok-b", "hang", "slow", "ratelimit", "quota", "crash500",
-  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm",
+  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm", "leaky",
 ];
+
+/** Chiave Google finta (formato reale) che "leaky" ripete nei suoi errori. */
+export const FAKE_GOOGLE_KEY = "AIzaSyChaos0123456789abcdefghijklmnopq";
 
 const calls = Object.create(null);   // chiamate di chat per modello (prove escluse)
 const probes = Object.create(null);  // prove del controllo d'avvio per modello
@@ -153,6 +157,11 @@ async function handle(req, res) {
       if (!mt || mt > 1000) return send(res, 429, err(`Request too large for model \`otpm\` in organization org-chaos service tier \`on_demand\` on output tokens per minute (OTPM): Limit 1000, Requested ${mt || 4096}. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again.`, "tokens"));
       return send(res, 200, completion(model, okText(model, user)));
     }
+    case "leaky": {
+      // Come OpenAI con una chiave sbagliata: il provider ripete la chiave ricevuta nel messaggio.
+      const key = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+      return send(res, 401, err(`Incorrect API key provided: ${key}. Also tried ${FAKE_GOOGLE_KEY} (Authorization: Bearer ${key}).`, "invalid_request_error"));
+    }
     case "gone":
       return send(res, 404, err(`The model \`${model}\` does not exist or you do not have access to it. model not found`, "invalid_request_error"));
     default:
@@ -160,11 +169,14 @@ async function handle(req, res) {
   }
 }
 
-const port = Number(process.argv[2] ?? process.env.MOCK_PORT ?? 0);
-const server = createServer((req, res) => {
-  handle(req, res).catch((e) => { if (!res.headersSent) send(res, 500, err(String(e))); else res.end(); });
-});
-server.listen(port, "127.0.0.1", () => {
-  console.log(`MOCK_PORT=${server.address().port}`);
-});
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { server.closeAllConnections?.(); process.exit(0); });
+// Server solo se eseguito direttamente: run.mjs importa questo file per MODELS e FAKE_GOOGLE_KEY.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const port = Number(process.argv[2] ?? process.env.MOCK_PORT ?? 0);
+  const server = createServer((req, res) => {
+    handle(req, res).catch((e) => { if (!res.headersSent) send(res, 500, err(String(e))); else res.end(); });
+  });
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`MOCK_PORT=${server.address().port}`);
+  });
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { server.closeAllConnections?.(); process.exit(0); });
+}

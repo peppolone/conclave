@@ -2,6 +2,7 @@
 import { config, type Provider } from "./config.ts";
 import { once, HttpError, isHardLimit } from "./adapters/openai-compat.ts";
 import { familyOf } from "./family.ts";
+import { redact } from "./redact.ts";
 
 export interface CatalogModel {
   id: string;
@@ -149,7 +150,7 @@ export async function probe(providerId: string, model: string): Promise<ProbeRes
     return { status: "ok", ms: Date.now() - started };
   } catch (e) {
     const ms = Date.now() - started;
-    const message = (e as Error).message.slice(0, 200);
+    const message = redact((e as Error).message).slice(0, 200);
     if (!(e instanceof HttpError)) return { status: "error", ms, message };
     if (e.status === 401 || e.status === 403) return { status: "auth", ms, message };
     if (e.status === 429) return { status: isHardLimit(message) ? "quota" : "busy", ms, message };

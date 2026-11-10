@@ -1,9 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection } from "./config.ts";
 import { createDebate, listDebates, getDebate, deleteDebate } from "./db.ts";
 import { runDebate, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
 import { listCatalog, probe } from "./catalog.ts";
 import { getHealth, runHealthCheck, isChecking } from "./health.ts";
+import { engineToken } from "./bootstrap.ts";
+import { redact, redactProcessOutput } from "./redact.ts";
+
+redactProcessOutput();
 
 interface Running {
   events: DebateEvent[];
@@ -29,6 +34,14 @@ class BadRequest extends Error {
   constructor(status: number, message: string) { super(message); this.status = status; }
 }
 
+/** Token dell'app (vedi bootstrap.ts): confronto a tempo costante. */
+function authorized(req: IncomingMessage): boolean {
+  if (!engineToken) return true;
+  const got = Buffer.from(String(req.headers.authorization ?? ""));
+  const want = Buffer.from(`Bearer ${engineToken}`);
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
 async function readBody(req: IncomingMessage): Promise<unknown> {
   let s = "";
   for await (const chunk of req) {
@@ -48,6 +61,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // Accetta solo richieste dirette a localhost (protezione da DNS rebinding).
   const host = (req.headers.host ?? "").split(":")[0];
   if (host !== "localhost" && host !== "127.0.0.1") return json(res, 403, { error: "host non consentito" });
+  // Solo l'app che ha avviato il motore: non altri processi locali né pagine web.
+  if (!authorized(req)) return json(res, 401, { error: "non autorizzato" });
 
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
   const path = url.pathname;
@@ -81,7 +96,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     try {
       return json(res, 200, await listCatalog(catMatch[1], url.searchParams.has("fresh")));
     } catch (e) {
-      return json(res, 502, { error: (e as Error).message });
+      return json(res, 502, { error: redact((e as Error).message) });
     }
   }
 
@@ -208,7 +223,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
 createServer((req, res) => {
   handle(req, res).catch((e) => {
-    if (!res.headersSent) json(res, e instanceof BadRequest ? e.status : 500, { error: (e as Error).message });
+    if (!res.headersSent) json(res, e instanceof BadRequest ? e.status : 500, { error: redact((e as Error).message) });
     else res.end();
   });
 }).listen(PORT, "127.0.0.1", function (this: import("node:net").Server) {
@@ -217,7 +232,7 @@ createServer((req, res) => {
   const on = config.models.filter(isAvailable).map((m) => m.label);
   // Riga letta dall'app Mac per sapere su quale porta collegarsi (PORT=0 = porta libera a caso).
   console.log(`COUNCIL_PORT=${port}`);
-  console.log(`Motore Conclave pronto su http://localhost:${port} (solo API)`);
+  console.log(`Motore Conclave pronto su http://localhost:${port} (solo API${engineToken ? ", con token" : ", senza token: solo sviluppo"})`);
   console.log(`Modelli disponibili (${on.length}): ${on.join(", ")}`);
   // Controllo all'avvio in background: l'interfaccia mostra lo stato man mano.
   runHealthCheck().then(() => {

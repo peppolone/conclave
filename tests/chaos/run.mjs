@@ -6,24 +6,32 @@
 
 import { spawn } from "node:child_process";
 import { request } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readdir } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MODELS } from "./mock-provider.mjs";
+import { MODELS, FAKE_GOOGLE_KEY } from "./mock-provider.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
 const MIN = 60_000;
 
 let mock, engine, dataDir, enginePort, mockPort;
+/** Token dell'API del motore, passato sullo stdin come fa l'app. */
+const TOKEN = randomBytes(32).toString("hex");
+const CHAOS_KEY = "chaos-test-key-0123456789";
+/** Chiave incollata male (a capo in mezzo): fetch fallisce prima di partire e ripete l'intestazione. */
+const BAD_KEY_TAIL = "secret-ABCDEF0123456789";
+const CHAOS_BAD_KEY = `chaos-bad\n${BAD_KEY_TAIL}`;
 let cleaned = false;
 
 // ---------- avvio e chiusura ----------
 
-function startProcess(cmd, args, env, marker) {
+function startProcess(cmd, args, env, marker, stdinLine) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { cwd: ROOT, env, stdio: ["pipe", "pipe", "pipe"] });
+    if (stdinLine) p.stdin.write(stdinLine + "\n");
     let buf = "";
     const log = [];
     p.log = log;
@@ -61,7 +69,7 @@ process.on("SIGTERM", async () => { await cleanup(); process.exit(143); });
 function api(method, path, { body, headers = {}, port = enginePort, raw = false } = {}) {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? undefined : raw ? String(body) : JSON.stringify(body);
-    const h = { Host: `127.0.0.1:${port}`, ...headers };
+    const h = { Host: `127.0.0.1:${port}`, ...(port === enginePort ? { Authorization: `Bearer ${TOKEN}` } : {}), ...headers };
     if (data !== undefined) {
       h["Content-Length"] = Buffer.byteLength(data);
       if (!Object.keys(h).some((k) => k.toLowerCase() === "content-type")) h["Content-Type"] = "application/json";
@@ -96,7 +104,7 @@ function followEvents(id, timeoutMs) {
       resolve({ events, timedOut });
     };
     const timer = setTimeout(() => finish(true), timeoutMs);
-    const req = request({ host: "127.0.0.1", port: enginePort, path: `/api/debates/${id}/events`, headers: { Host: `127.0.0.1:${enginePort}` } }, (res) => {
+    const req = request({ host: "127.0.0.1", port: enginePort, path: `/api/debates/${id}/events`, headers: { Host: `127.0.0.1:${enginePort}`, Authorization: `Bearer ${TOKEN}` } }, (res) => {
       if (res.statusCode !== 200) { res.resume(); return finish(false); }
       let buf = "";
       res.setEncoding("utf8");
@@ -321,6 +329,9 @@ const SCENARIOS = {
       ["modello duplicato (resta 1 solo)", { body: { ...base, models: ["ok-a", "ok-a"] } }, 400],
       ["11 partecipanti (max 10)", { body: { ...base, models: ["ok-a", "ok-b", "hang", "slow", "ratelimit", "quota", "crash500", "empty", "huge", "html", "flaky-critique"] } }, 400],
       ["corpo > 100 kB", { body: { ...base, question: "x".repeat(150_000) } }, 413],
+      ["senza token", { body: base, headers: { Authorization: "" } }, 401],
+      ["token sbagliato", { body: base, headers: { Authorization: `Bearer ${"0".repeat(64)}` } }, 401],
+      ["token come cookie/query", { body: base, headers: { Authorization: "", Cookie: `token=${TOKEN}` } }, 401],
     ];
     const wrong = [];
     for (const [name, opts, want] of cases) {
@@ -390,7 +401,45 @@ SCENARIOS.o = async function o() {
   return [true, `done, otpm ha risposto in tutte le fasi abbassando max_tokens`, r.secs];
 };
 
+// Chiavi mai visibili: il provider ripete la chiave nell'errore, ma né cronologia, né eventi,
+// né log del motore devono contenerla (né il token dell'API).
+SCENARIOS.p = async function p() {
+  const max = 60;
+  const r = await debate("p", ["ok-a", "ok-b", "leaky", "badkey"], 0, "ok-a", max * 1000);
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const err = errMsgs(r.state, "leaky")[0]?.error ?? "";
+  if (!err) return [false, "leaky senza errore registrato", r.secs];
+  if (!errMsgs(r.state, "badkey").length) return [false, "badkey senza errore registrato", r.secs];
+  const where = { cronologia: JSON.stringify(r.state), eventi: JSON.stringify(r.events), log: engine.log.join("\n") };
+  const leaks = Object.entries(where).flatMap(([k, t]) =>
+    [[CHAOS_KEY, "chiave"], [BAD_KEY_TAIL, "chiave rovinata"], [FAKE_GOOGLE_KEY, "AIza"], [TOKEN, "token"]].filter(([v]) => t.includes(v)).map(([, n]) => `${n} in ${k}`));
+  if (leaks.length) return [false, `segreti visibili: ${leaks.join(", ")}`, r.secs];
+  if (!err.includes("[chiave nascosta]")) return [false, `errore senza maschera: ${err.slice(0, 80)}`, r.secs];
+  return [true, `done, errore mascherato: "${err.slice(0, 70)}…"`, r.secs];
+};
+
+// File dei dati leggibili solo dall'utente (cartelle 0700, file 0600).
+SCENARIOS.q = async function q() {
+  const started = Date.now();
+  const open = [];
+  const walk = async (dir) => {
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      const f = join(dir, e.name);
+      if (f.endsWith("models.chaos.json")) continue; // scritto dalla suite, non dal motore
+      const mode = (await stat(f)).mode & 0o777;
+      if (mode & 0o077) open.push(`${f.slice(dataDir.length + 1)} ${mode.toString(8)}`);
+      if (e.isDirectory()) await walk(f);
+    }
+  };
+  await walk(dataDir);
+  const secs = (Date.now() - started) / 1000;
+  if (open.length) return [false, `leggibili da altri: ${open.slice(0, 5).join(", ")}`, secs];
+  return [true, "database, WAL e file del motore solo per l'utente", secs];
+};
+
 const DESCR = {
+  p: "chiavi e token mai visibili", q: "permessi dei file dati",
   n: "voce resta sulla riserva", o: "limite token in uscita (OTPM)",
   m: "voce di famiglia: riserva se il principale si blocca",
   a: "ok-a + ok-b, 3 round", b: "ok-a + ok-b + hang, 2 round", b2: "un solo modello rimasto", c: "flaky-critique rientra", d: "ratelimit con attesa",
@@ -410,17 +459,22 @@ async function main() {
   const cfgPath = join(dataDir, "models.chaos.json");
   const member = (id) => ({ id, label: `Chaos ${id}`, kind: "openai", provider: "chaos", model: id, family: id, default: false });
   await writeFile(cfgPath, JSON.stringify({
-    providers: { chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" } },
+    providers: {
+      chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" },
+      chaosbad: { name: "Chaos chiave rovinata", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_BAD_KEY" },
+    },
     // Giudice predefinito non Claude: un modello "ritirato", così la catena di riserva passa ai partecipanti.
     judge: { id: "chaos-judge", label: "Chaos giudice predefinito", kind: "openai", provider: "chaos", model: "gone" },
     // Voce di famiglia: il modello principale si blocca, deve rispondere la riserva ok-b.
-    models: [...MODELS.map(member), { id: "voce", label: "Voce di famiglia", kind: "openai", provider: "chaos", family: "voce", model: "hang", fallback: ["ok-b"], default: false }],
+    models: [...MODELS.map(member), { id: "voce", label: "Voce di famiglia", kind: "openai", provider: "chaos", family: "voce", model: "hang", fallback: ["ok-b"], default: false },
+      { id: "badkey", label: "Chiave rovinata", kind: "openai", provider: "chaosbad", model: "ok-a", family: "badkey", default: false }],
   }, null, 2));
 
-  const env = { ...process.env, COUNCIL_DATA: dataDir, COUNCIL_MODELS: cfgPath, PORT: "0", CHAOS_KEY: "chaos-test-key" };
+  // Avviato come dall'app: token sulla prima riga dello stdin, chiusura con lo stdin.
+  const env = { ...process.env, COUNCIL_DATA: dataDir, COUNCIL_MODELS: cfgPath, PORT: "0", CHAOS_KEY, CHAOS_BAD_KEY, COUNCIL_PARENT: "app" };
   delete env.ANTHROPIC_API_KEY;
-  delete env.COUNCIL_PARENT;
-  const e = await startProcess(process.execPath, ["--disable-warning=ExperimentalWarning", "src/server.ts"], env, "COUNCIL_PORT");
+  const e = await startProcess(process.execPath, ["--disable-warning=ExperimentalWarning", "src/server.ts"], env, "COUNCIL_PORT",
+    JSON.stringify({ token: TOKEN }));
   engine = e.proc; enginePort = e.port;
   engine.removeAllListeners("exit");
   engine.on("exit", (code) => { engine.exited = code ?? "signal"; });
