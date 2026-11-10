@@ -108,7 +108,7 @@ final class ModelsModel: ObservableObject {
 
     private func get<T: Decodable>(_ path: String, as: T.Type) async throws -> T {
         guard let u = url(path) else { throw URLError(.cannotConnectToHost) }
-        let (data, resp) = try await URLSession.shared.data(from: u)
+        let (data, resp) = try await URLSession.shared.data(for: Engine.request(u))
         if let h = resp as? HTTPURLResponse, h.statusCode >= 400 {
             let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
             throw NSError(domain: "council", code: h.statusCode, userInfo: [NSLocalizedDescriptionKey: msg ?? String(format: L("errore %d"), h.statusCode)])
@@ -118,7 +118,7 @@ final class ModelsModel: ObservableObject {
 
     private func send(_ method: String, _ path: String, body: Data) async throws -> Data {
         guard let u = url(path) else { throw URLError(.cannotConnectToHost) }
-        var req = URLRequest(url: u, timeoutInterval: 60)
+        var req = Engine.request(u)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body

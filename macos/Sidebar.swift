@@ -50,7 +50,7 @@ final class SidebarModel: ObservableObject {
             var path = "/api/debates"
             if !q.isEmpty, let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) { path += "?q=\(enc)" }
             guard let u = url(path),
-                  let (data, _) = try? await URLSession.shared.data(from: u),
+                  let (data, _) = try? await URLSession.shared.data(for: Engine.request(u)),
                   !Task.isCancelled,
                   let list = try? JSONDecoder().decode([DebateSummary].self, from: data) else { return }
             items = list
@@ -107,7 +107,7 @@ final class SidebarModel: ObservableObject {
     func delete(_ id: Int) {
         Task {
             guard let u = url("/api/debates/\(id)") else { return }
-            var req = URLRequest(url: u)
+            var req = Engine.request(u)
             req.httpMethod = "DELETE"
             _ = try? await URLSession.shared.data(for: req)
             if selected == id { selected = nil }

@@ -3,6 +3,7 @@
 
 import AppKit
 import Combine
+import Security
 import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
@@ -14,7 +15,7 @@ enum Paths {
         // COUNCIL_DATA (solo sviluppo e prove): cartella dati alternativa, mai quella reale.
         if let custom = ProcessInfo.processInfo.environment["COUNCIL_DATA"], !custom.isEmpty {
             let dir = URL(fileURLWithPath: custom, isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             return dir
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -22,12 +23,48 @@ enum Paths {
         // Se il passaggio dal vecchio nome non è riuscito a spostarla, si resta sulla cartella vecchia.
         let legacy = base.appendingPathComponent("AI Council", isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path), FileManager.default.fileExists(atPath: legacy.path) { dir = legacy }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         return dir
     }()
     static let envFile = dataDir.appendingPathComponent(".env")
     static let logFile = dataDir.appendingPathComponent("server.log")
     static let serverDir = Bundle.main.resourceURL!.appendingPathComponent("server", isDirectory: true)
+
+    /// Chiavi, cronologia e log leggibili solo dall'utente: cartelle 0700, file 0600.
+    /// Il motore crea i file nuovi già così; qui si sistemano quelli delle versioni precedenti.
+    /// Solo i file noti: con `COUNCIL_DATA` la cartella potrebbe contenere altro.
+    static func secure() {
+        let fm = FileManager.default
+        let set = { (url: URL, mode: Int) in try? fm.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path) }
+        set(dataDir, 0o700)
+        for name in [".env", "selection.json", "health.json", "server.log"] { set(dataDir.appendingPathComponent(name), 0o600) }
+        let db = dataDir.appendingPathComponent("data", isDirectory: true)
+        set(db, 0o700)
+        for name in (try? fm.contentsOfDirectory(atPath: db.path)) ?? [] where name.hasPrefix("council.db") {
+            set(db.appendingPathComponent(name), 0o600)
+        }
+    }
+}
+
+// MARK: - Accesso al motore
+
+enum Engine {
+    /// Segreto di questa sessione dell'app, mandato al motore sullo stdin (mai nell'ambiente):
+    /// senza, il motore risponde 401 a qualunque altro processo o pagina web.
+    static let token: String = {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            fatalError("Generatore casuale di sistema non disponibile")
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }()
+
+    /// Richiesta al motore già autenticata.
+    static func request(_ url: URL, timeout: TimeInterval = 60) -> URLRequest {
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return req
+    }
 }
 
 // MARK: - Passaggio dal vecchio nome
@@ -126,7 +163,7 @@ final class ServerController {
     }
 
     private func launch(node: String, path: String) {
-        FileManager.default.createFile(atPath: Paths.logFile.path, contents: nil)
+        FileManager.default.createFile(atPath: Paths.logFile.path, contents: nil, attributes: [.posixPermissions: 0o600])
         log = try? FileHandle(forWritingTo: Paths.logFile)
 
         let p = Process()
@@ -168,6 +205,10 @@ final class ServerController {
         do {
             try p.run()
             process = p
+            // Prima riga dello stdin: il token dell'API (vedi src/bootstrap.ts). Poi lo stdin resta
+            // aperto: quando l'app si chiude, il motore lo vede chiudersi e termina.
+            let hello = try JSONSerialization.data(withJSONObject: ["token": Engine.token])
+            try input.fileHandleForWriting.write(contentsOf: hello + Data("\n".utf8))
         } catch {
             onCrash?(String(format: L("Impossibile avviare il motore: %@"), error.localizedDescription))
         }
@@ -224,6 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         seedSettings()
+        Paths.secure()
         _ = AppLanguage.launched
         // Tema salvato (Sistema / Chiaro / Scuro) prima di creare la finestra.
         AppAppearance.apply()
@@ -930,6 +972,8 @@ struct HelpView: View {
     }
 }
 
+// Scrivere sullo stdin di un motore già uscito deve dare un errore, non chiudere l'app.
+signal(SIGPIPE, SIG_IGN)
 LegacyMigration.run()
 
 MainActor.assumeIsolated {

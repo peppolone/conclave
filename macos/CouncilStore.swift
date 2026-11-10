@@ -147,7 +147,7 @@ final class CouncilStore: ObservableObject {
 
     private func request(_ method: String, _ path: String, body: Any? = nil) async throws -> Data {
         guard let u = url(path) else { throw URLError(.cannotConnectToHost) }
-        var req = URLRequest(url: u, timeoutInterval: 30)
+        var req = Engine.request(u, timeout: 30)
         req.httpMethod = method
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -308,8 +308,7 @@ final class CouncilStore: ObservableObject {
         stream?.cancel()
         stream = Task { [weak self] in
             guard let self, let u = self.url("/api/debates/\(id)/events") else { return }
-            var req = URLRequest(url: u)
-            req.timeoutInterval = 3600
+            let req = Engine.request(u, timeout: 3600)
             do {
                 let (bytes, _) = try await URLSession.shared.bytes(for: req)
                 for try await line in bytes.lines {
