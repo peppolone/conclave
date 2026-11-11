@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatRequest, ChatResult } from "./types.ts";
 import { redact } from "../redact.ts";
+import { appKeyNames } from "../bootstrap.ts";
 
 // Cartella vuota come cwd: Claude non vede file di progetto.
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "conclave-"));
@@ -24,6 +25,12 @@ export function chatClaude(model: string, req: ChatRequest): Promise<ChatResult>
   const env = { ...process.env };
   // Se fosse impostata una API key, Claude Code la userebbe al posto dell'abbonamento.
   delete env.ANTHROPIC_API_KEY;
+  // Claude è un processo esterno: non gli servono le chiavi degli altri provider (da .env o
+  // dall'app) né le variabili del motore. Restano quelle di Claude stesso (CLAUDE_CODE_*).
+  for (const k of Object.keys(env)) {
+    if (k.startsWith("CLAUDE_CODE_")) continue;
+    if (/_API_KEY$/.test(k) || k.startsWith("COUNCIL_") || appKeyNames.includes(k)) delete env[k];
+  }
 
   const args = [
     "-p",

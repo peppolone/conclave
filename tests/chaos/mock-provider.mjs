@@ -19,6 +19,7 @@ export const FAKE_GOOGLE_KEY = "AIzaSyChaos0123456789abcdefghijklmnopq";
 
 const calls = Object.create(null);   // chiamate di chat per modello (prove escluse)
 const probes = Object.create(null);  // prove del controllo d'avvio per modello
+const auths = Object.create(null);   // intestazione Authorization ricevuta per modello ("whoami")
 const seenPhase = new Set();         // "ratelimit": prima chiamata per fase già vista
 let hanging = 0;                     // connessioni "hang" ancora aperte
 
@@ -85,10 +86,10 @@ async function handle(req, res) {
   const path = new URL(req.url ?? "/", "http://x").pathname.replace(/\/+$/, "");
 
   if (req.method === "GET" && path.endsWith("/models")) {
-    return send(res, 200, { object: "list", data: [...MODELS, "paced"].map((id) => ({ id, object: "model", owned_by: "chaos" })) });
+    return send(res, 200, { object: "list", data: [...MODELS, "paced", "whoami"].map((id) => ({ id, object: "model", owned_by: "chaos" })) });
   }
   if (req.method === "GET" && path.endsWith("/stats")) {
-    return send(res, 200, { calls, probes, hanging });
+    return send(res, 200, { calls, probes, hanging, auths });
   }
   if (req.method !== "POST" || !path.endsWith("/chat/completions")) return send(res, 404, err("not found"));
 
@@ -97,6 +98,8 @@ async function handle(req, res) {
   const msgs = Array.isArray(body.messages) ? body.messages : [];
   const system = String(msgs.find((m) => m.role === "system")?.content ?? "");
   const user = String(msgs.find((m) => m.role === "user")?.content ?? "");
+  // "whoami": ricorda la chiave ricevuta (solo prove: verifica che arrivi quella data dall'app).
+  if (model === "whoami") auths.whoami = String(req.headers.authorization ?? "");
 
   if (user.trim() === "Scrivi solo: OK") {
     probes[model] = (probes[model] ?? 0) + 1;
@@ -107,6 +110,7 @@ async function handle(req, res) {
   switch (model) {
     case "ok-a":
     case "ok-b":
+    case "whoami":
       return send(res, 200, completion(model, okText(model, user)));
     case "hang":
       hanging++;

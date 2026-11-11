@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtemp, rm, writeFile, stat, readdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readdir, chmod } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -27,6 +27,9 @@ const CHAOS_KEY = "chaos-test-key-0123456789";
 const BAD_KEY_TAIL = "secret-ABCDEF0123456789";
 const CHAOS_BAD_KEY = `chaos-bad\n${BAD_KEY_TAIL}`;
 let cleaned = false;
+/** Motori e cartelle in più avviati dagli scenari sulle chiavi dall'app (w, x). */
+const extraProcs = [];
+const extraDirs = [];
 
 // ---------- avvio e chiusura ----------
 
@@ -57,10 +60,10 @@ function startProcess(cmd, args, env, marker, stdinLine) {
 async function cleanup() {
   if (cleaned) return;
   cleaned = true;
-  for (const p of [engine, mock]) {
+  for (const p of [engine, mock, ...extraProcs]) {
     if (p && p.exitCode === null && !p.killed) p.kill("SIGTERM");
   }
-  if (dataDir) await rm(dataDir, { recursive: true, force: true }).catch(() => {});
+  for (const d of [dataDir, ...extraDirs]) if (d) await rm(d, { recursive: true, force: true }).catch(() => {});
 }
 
 process.on("SIGINT", async () => { console.log("\nInterrotto: chiudo mock e motore."); await cleanup(); process.exit(130); });
@@ -541,9 +544,138 @@ SCENARIOS.v = async function v() {
   return [true, `verdetto vuoto scartato (${failed.error}), deciso da ${row.model_id}`, r.secs];
 };
 
+// ---------- chiavi dall'app (hello sullo stdin) ----------
+
+/** Ambiente pulito per un motore in più: nessuna chiave delle prove ereditata dal runner. */
+function cleanEnv(extra) {
+  const env = { ...process.env, PORT: "0", COUNCIL_PARENT: "app", ...extra };
+  for (const k of Object.keys(env)) if (/_(API_)?KEY$|_TOKEN$/.test(k) || k === "NODE_OPTIONS") delete env[k];
+  return env;
+}
+
+/** Avvia un motore separato (dati e config propri) con la riga di hello data. */
+async function startExtraEngine(cfg, hello, { dotenv, env: extra } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "council-chaos-keys-"));
+  extraDirs.push(dir);
+  const cfgPath = join(dir, "models.json");
+  await writeFile(cfgPath, JSON.stringify(cfg));
+  if (dotenv) await writeFile(join(dir, ".env"), dotenv);
+  const e = await startProcess(process.execPath, ["--disable-warning=ExperimentalWarning", "src/server.ts"],
+    cleanEnv({ COUNCIL_DATA: dir, COUNCIL_MODELS: cfgPath, ...extra }), "COUNCIL_PORT", hello);
+  extraProcs.push(e.proc);
+  e.proc.removeAllListeners("exit");
+  e.proc.on("exit", (code) => { e.proc.exited = code ?? "signal"; });
+  return { ...e, dir };
+}
+
+const authed = (tok) => ({ Authorization: `Bearer ${tok}` });
+
+// Chiavi passate dall'app sullo stdin: arrivano al provider (con precedenza su .env), la Claude
+// CLI non le eredita, e se il provider le ripete nell'errore non compaiono in log né cronologia.
+SCENARIOS.w = async function w() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const tok = randomBytes(32).toString("hex");
+  const APP_KEY = "app-keychain-key-" + randomBytes(12).toString("hex");
+  const DOTENV_KEY = "dotenv-key-should-lose-0123456789";
+  // Finta Claude CLI: risponde con i nomi delle variabili sensibili che ha ereditato.
+  const bin = await mkdtemp(join(tmpdir(), "council-chaos-bin-"));
+  extraDirs.push(bin);
+  await writeFile(join(bin, "claude"), `#!${process.execPath}\nprocess.stdin.resume();process.stdin.on("end",()=>{const n=Object.keys(process.env).filter(k=>/_KEY$|_TOKEN$|^COUNCIL_/.test(k));process.stdout.write(JSON.stringify({result:"ENV["+n.join(",")+"]"}))});\n`);
+  await chmod(join(bin, "claude"), 0o755);
+  const cfg = {
+    providers: { app: { name: "Dall'app", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "APP_PROV_API_KEY" } },
+    judge: { id: "j", label: "Giudice", kind: "openai", provider: "app", model: "whoami" },
+    models: [
+      { id: "whoami", label: "Whoami", kind: "openai", provider: "app", model: "whoami", family: "whoami", default: false },
+      { id: "leaky", label: "Leaky", kind: "openai", provider: "app", model: "leaky", family: "leaky", default: false },
+      { id: "fakeclaude", label: "Finta Claude", kind: "claude-cli", model: "sonnet", default: false },
+    ],
+  };
+  const e = await startExtraEngine(cfg, JSON.stringify({ token: tok, keys: { APP_PROV_API_KEY: APP_KEY } }),
+    { dotenv: `APP_PROV_API_KEY=${DOTENV_KEY}\n`, env: { PATH: `${bin}:${process.env.PATH}` } });
+  const c = await api("POST", "/api/debates", { port: e.port, headers: authed(tok),
+    body: { question: QUESTION("w"), models: ["whoami", "leaky", "fakeclaude"], rounds: 0, judge: "whoami", claudeModel: "sonnet" } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  let state;
+  for (let i = 0; i < 100; i++) {
+    state = (await api("GET", `/api/debates/${c.body.id}`, { port: e.port, headers: authed(tok) })).body;
+    if (state?.status && state.status !== "running") break;
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  if (state?.status !== "done") return [false, `stato "${state?.status}"`, secs()];
+  const got = (await api("GET", "/stats", { port: mockPort })).body?.auths?.whoami;
+  if (got !== `Bearer ${APP_KEY}`) return [false, `il provider ha ricevuto ${got?.includes(DOTENV_KEY) ? "la chiave di .env" : "un'altra intestazione"}`, secs()];
+  const claudeOut = okMsgs(state, "fakeclaude")[0]?.content ?? "";
+  if (!claudeOut.startsWith("ENV[")) return [false, `finta Claude senza risposta: ${claudeOut.slice(0, 60)}`, secs()];
+  if (/APP_PROV_API_KEY|COUNCIL_/.test(claudeOut)) return [false, `la Claude CLI eredita: ${claudeOut.slice(0, 80)}`, secs()];
+  const err = errMsgs(state, "leaky")[0]?.error ?? "";
+  if (!err.includes("[chiave nascosta]")) return [false, `errore di leaky senza maschera`, secs()];
+  const where = { cronologia: JSON.stringify(state), log: e.proc.log.join("\n") };
+  const leaks = Object.entries(where).flatMap(([k, t]) =>
+    [[APP_KEY, "chiave dall'app"], [DOTENV_KEY, "chiave di .env"], [tok, "token"]].filter(([v]) => t.includes(v)).map(([, n]) => `${n} in ${k}`));
+  if (leaks.length) return [false, `segreti visibili: ${leaks.join(", ")}`, secs()];
+  return [true, `Bearer dall'app (non .env), Claude CLI senza chiavi, errore mascherato`, secs()];
+};
+
+// Hello ostili: il motore parte comunque e nessun campo non valido diventa una variabile.
+SCENARIOS.x = async function x() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const names = ["HOSTILE_API_KEY", "HOSTILE2_API_KEY", "HOSTILE3_API_KEY", "HOSTILE4_API_KEY", "HOSTILE5_API_KEY",
+    "HOSTILE6_API_KEY", "HOSTILE7_TOKEN", "NODE_OPTIONS", "COUNCIL_TEST_TOKEN", "VALID_API_KEY"];
+  const providers = Object.fromEntries(names.map((n) => [n.toLowerCase().replace(/_/g, "-"), { baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: n }]));
+  const first = Object.keys(providers)[0];
+  const cfg = {
+    providers,
+    judge: { id: "j", label: "Giudice", kind: "openai", provider: first, model: "ok-a" },
+    models: [{ id: "m", label: "M", kind: "openai", provider: first, model: "ok-a", family: "m", default: false }],
+  };
+  const secretValues = ["valid-looking-key-123", "lowercase-key-1234", "trailing-space-name-123", "no-suffix-12345",
+    "--require=/nonexistent/x.js", "test-token-that-should-not-apply-0123456789", "break-123456", "y".repeat(5000)];
+  const mixed = {
+    "__proto__": { HOSTILE_API_KEY: secretValues[0] },
+    "hostile_api_key": secretValues[1],
+    "HOSTILE_API_KEY ": secretValues[2],
+    "HOSTILE_API": secretValues[3],
+    "NODE_OPTIONS": secretValues[4],
+    "COUNCIL_TEST_TOKEN": secretValues[5],
+    "HOSTILE2_API_KEY": `line\n${secretValues[6]}`,
+    "HOSTILE3_API_KEY": secretValues[7],
+    "HOSTILE4_API_KEY": 12345678901,
+    "HOSTILE5_API_KEY": "",
+    "HOSTILE6_API_KEY": "short",
+    "HOSTILE7_TOKEN": { nested: "object-value-12345" },
+    "VALID_API_KEY": "valid-key-0123456789",
+  };
+  const hellos = [["stringa", "HOSTILE_API_KEY=abc12345678"], ["array", ["HOSTILE_API_KEY", "abc12345678"]], ["null", null], ["numero", 42], ["misto", mixed]];
+  const tok = randomBytes(32).toString("hex");
+  // JSON.stringify ignora "__proto__" scritto in un letterale (è il prototipo): lo si inserisce a mano.
+  const helloText = (keys) => JSON.stringify({ token: tok, keys }).replace('"keys":{', `"keys":{"__proto__":${JSON.stringify(mixed.__proto__)},`);
+  const wrong = [];
+  await Promise.all(hellos.map(async ([label, keys]) => {
+    let e;
+    try {
+      e = await startExtraEngine(cfg, label === "misto" ? helloText(keys) : JSON.stringify({ token: tok, keys }));
+    } catch (err) { wrong.push(`${label}: motore non partito (${err.message})`); return; }
+    const r = await api("GET", "/api/providers", { port: e.port, headers: authed(tok) });
+    if (r.status !== 200) { wrong.push(`${label}: /api/providers ${r.status}`); return; }
+    const set = r.body.filter((p) => p.hasKey).map((p) => providers[p.id]?.keyEnv ?? p.id);
+    const expected = label === "misto" ? ["VALID_API_KEY"] : [];
+    if (set.join() !== expected.join()) wrong.push(`${label}: chiavi impostate [${set.join(",")}]`);
+    const log = e.proc.log.join("\n");
+    const shown = secretValues.filter((v) => log.includes(v.slice(0, 40)));
+    if (shown.length) wrong.push(`${label}: ${shown.length} valori nel log`);
+    if (e.proc.exited !== undefined) wrong.push(`${label}: motore terminato`);
+  }));
+  if (wrong.length) return [false, wrong.join("; "), secs()];
+  return [true, `${hellos.length} hello ostili: motore vivo, solo VALID_API_KEY impostata, nessun valore nel log`, secs()];
+};
+
 const DESCR = {
   r: "corpo spezzato e corpi non-oggetto", s: "eliminazione a dibattito in corso", t: "SSE: ricollegamento a metà",
   u: "riga del titolo", v: "giudice con verdetto vuoto",
+  w: "chiavi dall'app: provider, Claude CLI, log", x: "hello con chiavi ostili",
   p: "chiavi e token mai visibili", q: "permessi dei file dati",
   n: "voce resta sulla riserva", o: "limite token in uscita (OTPM)",
   m: "voce di famiglia: riserva se il principale si blocca",

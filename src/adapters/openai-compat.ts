@@ -69,7 +69,7 @@ export function isHardLimit(message: string): boolean {
 
 export async function once(p: Provider, model: string, req: ChatRequest, timeoutMs = TIMEOUT_MS): Promise<string> {
   const key = process.env[p.keyEnv]?.trim();
-  if (!key) throw new Error(`chiave ${p.keyEnv} mancante nel file .env`);
+  if (!key) throw new Error(`chiave ${p.keyEnv} mancante: aggiungila in Impostazioni ▸ Chiavi API`);
 
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (req.signal) signals.push(req.signal);

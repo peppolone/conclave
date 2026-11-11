@@ -10,7 +10,7 @@ for (const m of config.models) {
     continue;
   }
   if (!isAvailable(m)) {
-    console.log(`·  ${m.label.padEnd(15)} nessuna chiave per "${m.provider}" in .env`);
+    console.log(`·  ${m.label.padEnd(15)} nessuna chiave per "${m.provider}" (Impostazioni ▸ Chiavi API o .env)`);
     continue;
   }
   try {
