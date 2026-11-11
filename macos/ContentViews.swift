@@ -265,7 +265,7 @@ struct ComposerView: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             } label: {
-                Label(store.rounds == 0 ? L("Solo risposte") : String(format: L("%d round"), store.rounds),
+                Label(store.rounds == 0 ? L("Solo risposte") : (store.rounds == 1 ? L("1 round") : String(format: L("%d round"), store.rounds)),
                       systemImage: "arrow.triangle.2.circlepath")
             }
             .help(L("Round di critica tra i modelli"))
@@ -877,7 +877,7 @@ struct DebateView: View {
     private var courseHeading: some View {
         let answers = debate.phases.reduce(0) { $0 + $1.cards.filter { $0.text != nil }.count }
         let rounds = store.roundCount(debate)
-        let scope = rounds == 0 ? L("Solo risposte iniziali") : String(format: L("Risposte iniziali e %d round"), rounds)
+        let scope = rounds == 0 ? L("Solo risposte iniziali") : (rounds == 1 ? L("Risposte iniziali e 1 round") : String(format: L("Risposte iniziali e %d round"), rounds))
         let count = answers == 1 ? L("1 risposta") : String(format: L("%d risposte"), answers)
         return HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {

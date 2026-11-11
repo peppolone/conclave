@@ -577,7 +577,7 @@ final class CouncilStore: ObservableObject {
     /// Round, giudice e durata, ciascuno con il simbolo da mostrare nell'intestazione.
     func metaItems(_ d: DebateState) -> [(symbol: String, text: String)] {
         var parts: [(symbol: String, text: String)] = []
-        if let r = d.rounds { parts.append(("arrow.triangle.2.circlepath", r == 0 ? L("senza round") : String(format: L("%d round"), r))) }
+        if let r = d.rounds { parts.append(("arrow.triangle.2.circlepath", r == 0 ? L("senza round") : (r == 1 ? L("1 round") : String(format: L("%d round"), r)))) }
         if let j = d.judgeLabel { parts.append(("person.fill.checkmark", String(format: L("giudice %@"), j))) }
         if let s = d.startedAt {
             let end = d.finishedAt ?? (d.isRunning ? Date.now : nil)
