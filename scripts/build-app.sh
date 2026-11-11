@@ -7,6 +7,9 @@
 #                       (predefinita: quella di questo Mac)
 #   VERSION=1.2.3       versione dell'app (predefinita: quella di package.json)
 #   NODE_BIN=<file>      binario di Node da includere, con le stesse architetture (scripts/fetch-node.sh)
+#   SIGNING_P12=<file>   certificato di firma del progetto (predefinito ~/.config/conclave/signing.p12)
+#   SIGNING_P12_PASSWORD password del .p12 (predefinita: ~/.config/conclave/signing.pass)
+#                       Senza certificato la firma è ad-hoc (in CI è un errore, salvo ALLOW_ADHOC=1).
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
@@ -87,8 +90,39 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "→ Firma locale"
-codesign --force --deep --sign - "$APP"
+# Firma con il certificato autofirmato del progetto: l'identità resta la stessa tra le versioni,
+# così il Portachiavi riconosce l'app aggiornata e non chiede la password (con la firma ad-hoc
+# cambierebbe a ogni build). Il certificato sta in un portachiavi temporaneo, mai in quello di login.
+SIGNING_P12="${SIGNING_P12:-$HOME/.config/conclave/signing.p12}"
+if [[ -z "${SIGNING_P12_PASSWORD:-}" && -f "$HOME/.config/conclave/signing.pass" ]]; then
+  SIGNING_P12_PASSWORD="$(<"$HOME/.config/conclave/signing.pass")"
+fi
+if [[ -f "$SIGNING_P12" && -n "${SIGNING_P12_PASSWORD:-}" ]]; then
+  echo "→ Firma (certificato del progetto)"
+  KC="$TMP/signing.keychain-db"
+  KCPASS="$(openssl rand -hex 16)"
+  # Una riga per portachiavi, tra virgolette e rientrata: si tolgono solo rientro e virgolette.
+  OLD_KCS=("${(@f)$(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')}")
+  trap 'security list-keychains -d user -s "${OLD_KCS[@]}"; rm -rf "$TMP"' EXIT
+  security create-keychain -p "$KCPASS" "$KC"
+  security set-keychain-settings "$KC"
+  security unlock-keychain -p "$KCPASS" "$KC"
+  security import "$SIGNING_P12" -k "$KC" -P "$SIGNING_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
+  security list-keychains -d user -s "$KC" "${OLD_KCS[@]}"
+  # Il certificato non è "fidato" per il sistema: codesign lo accetta indicandolo per impronta.
+  CERT_SHA1="$(security find-certificate -a -Z "$KC" | awk '/SHA-1/ {print $3; exit}')"
+  [[ -f "$APP/Contents/MacOS/node" ]] && codesign --force --sign "$CERT_SHA1" --keychain "$KC" "$APP/Contents/MacOS/node"
+  codesign --force --sign "$CERT_SHA1" --keychain "$KC" "$APP"
+  codesign -d -r- "$APP" 2>&1 | grep -q "certificate root" || { echo "Firma senza certificato del progetto"; exit 1; }
+else
+  echo "→ Firma ad-hoc (certificato del progetto assente: il Portachiavi chiederà la password dopo ogni build)"
+  # In CI una build da distribuire senza certificato è un errore; le PR (senza secrets) lo dichiarano.
+  if [[ -n "${CI:-}" && -z "${ALLOW_ADHOC:-}" ]]; then
+    echo "In CI serve il certificato (secrets SIGNING_P12_BASE64/SIGNING_P12_PASSWORD) o ALLOW_ADHOC=1"; exit 1
+  fi
+  codesign --force --deep --sign - "$APP"
+fi
 
 if [[ "${1:-}" == "--install" ]]; then
   echo "→ Installazione in /Applications"
