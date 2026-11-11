@@ -11,6 +11,7 @@
 "%d riserve" = "%d fallbacks";
 "%d risposte" = "%d answers";
 "%d round" = "%d rounds";
+"1 round" = "1 round";
 "%d s" = "%d s";
 "%d senza risposta" = "%d without an answer";
 "%d voci nel consiglio" = "%d voices in the council";
@@ -208,7 +209,8 @@
 "L'app usa solo i modelli gratuiti, quelli con “:free” nel nome. Senza credito le richieste al giorno sono poche e alcuni modelli sono lenti." = "The app only uses free models, the ones with “:free” in their name. Without credit there are few requests per day and some models are slow.";
 "La chiave funziona." = "The key works.";
 "La nuova lingua si applica al riavvio di Conclave." = "The new language takes effect when Conclave restarts.";
-"Le chiavi restano solo su questo Mac, nel file “.env” della cartella dati dell'app, leggibile solo dal tuo utente." = "Keys stay only on this Mac, in the “.env” file in the app’s data folder, readable only by your user.";
+"Le chiavi restano solo su questo Mac, nel Portachiavi di macOS (voci “Conclave – …” in Accesso Portachiavi)." = "Keys stay only on this Mac, in the macOS Keychain (“Conclave – …” items in Keychain Access).";
+"Portachiavi, voce %@: %@" = "Keychain, item %@: %@";
 "Le discussioni avviate compaiono qui." = "Discussions you start appear here.";
 "Le discussioni restano nella barra laterale. Cerca con ⌘F, elimina con ⌫ o con il clic destro." = "Discussions stay in the sidebar. Search with ⌘F, delete with ⌫ or by right-clicking.";
 "Le risposte dei modelli seguono sempre la lingua della domanda." = "Model answers always follow the language of the question.";
@@ -311,6 +313,7 @@
 "Risposte" = "Answers";
 "Risposte iniziali" = "Initial Answers";
 "Risposte iniziali e %d round" = "Initial answers and %d rounds";
+"Risposte iniziali e 1 round" = "Initial answers and 1 round";
 "Ritirati dal provider: %@; l'app li sostituisce da sola con i migliori disponibili (li trovi nel pannello Modelli)." = "Retired by the provider: %@; the app replaces them on its own with the best available (you’ll find them in the Models pane).";
 "Ritirato dal provider" = "Retired by the provider";
 "Round" = "Rounds";

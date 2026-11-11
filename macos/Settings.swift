@@ -87,36 +87,114 @@ let providerGuides: [ProviderGuide] = [
         note: L("Per avere GPT gratis non serve questa chiave: GPT-OSS, il modello open di OpenAI, è disponibile gratis con Groq, Cerebras o OpenRouter.")),
 ]
 
-// MARK: - File .env
+// MARK: - Chiavi API
 
 enum EnvFile {
     static func read() -> [String: String] {
         guard let text = try? String(contentsOf: Paths.envFile, encoding: .utf8) else { return [:] }
         var out: [String: String] = [:]
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { continue }
-            out[String(t[..<eq])] = String(t[t.index(after: eq)...]).trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+            guard let (k, v) = parse(line) else { continue }
+            out[k] = v
         }
         return out
     }
 
+    private static func parse(_ line: Substring) -> (String, String)? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { return nil }
+        return (String(t[..<eq]), String(t[t.index(after: eq)...]).trimmingCharacters(in: CharacterSet(charactersIn: " \"'")))
+    }
+
+    private static func envLines() -> [String] {
+        ((try? String(contentsOf: Paths.envFile, encoding: .utf8)) ?? "")
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    }
+
     /// Aggiorna solo le variabili indicate, lasciando invariati commenti e altre righe.
     static func write(_ values: [String: String]) throws {
-        var lines = ((try? String(contentsOf: Paths.envFile, encoding: .utf8)) ?? "")
-            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = envLines()
         var pending = values
         for i in lines.indices {
-            let t = lines[i].trimmingCharacters(in: .whitespaces)
-            guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { continue }
-            let k = String(t[..<eq])
+            guard let (k, _) = parse(Substring(lines[i])) else { continue }
             if let v = pending.removeValue(forKey: k) { lines[i] = "\(k)=\(v)" }
         }
         if lines.last == "" { lines.removeLast() }
         for (k, v) in pending.sorted(by: { $0.key < $1.key }) { lines.append("\(k)=\(v)") }
-        try (lines.joined(separator: "\n") + "\n").write(to: Paths.envFile, atomically: true, encoding: .utf8)
-        // Le chiavi sono personali: leggibili solo dall'utente.
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Paths.envFile.path)
+        try save(lines)
+    }
+
+    /// Toglie le righe delle variabili per cui `drop` è vero, lasciando invariato il resto.
+    static func remove(where drop: (String) -> Bool) throws {
+        let all = envLines()
+        let kept = all.filter { line in parse(Substring(line)).map { !drop($0.0) } ?? true }
+        guard kept.count != all.count else { return }
+        try save(kept.last == "" ? Array(kept.dropLast()) : kept)
+    }
+
+    /// File temporaneo già 0600 (le chiavi sono personali) e poi rename: mai un `.env` a metà.
+    private static func save(_ lines: [String]) throws {
+        let tmp = Paths.dataDir.appendingPathComponent(".env.tmp")
+        let data = Data((lines.joined(separator: "\n") + "\n").utf8)
+        guard FileManager.default.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: tmp.path])
+        }
+        guard rename(tmp.path, Paths.envFile.path) == 0 else {
+            let err = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            try? FileManager.default.removeItem(at: tmp)
+            throw err
+        }
+    }
+}
+
+/// Dove stanno le chiavi API: nel Portachiavi; nelle prove (`COUNCIL_DATA`) nel `.env` della
+/// cartella temporanea, senza mai toccare il Portachiavi reale.
+enum KeyStore {
+    static var usesKeychain: Bool { (ProcessInfo.processInfo.environment["COUNCIL_DATA"] ?? "").isEmpty }
+
+    static func isSecret(_ name: String) -> Bool { name.hasSuffix("_KEY") || name.hasSuffix("_TOKEN") }
+
+    /// Valori delle variabili indicate. Una chiave rimasta nel `.env` (passaggio al Portachiavi
+    /// non riuscito) vale finché non c'è la voce nel Portachiavi: il motore la usa ancora.
+    static func read(_ names: [String]) -> [String: String] {
+        let env = EnvFile.read()
+        guard usesKeychain else { return env }
+        var out: [String: String] = [:]
+        for name in names {
+            do { out[name] = try Keychain.conclave.read(name) ?? env[name] }
+            catch { NSLog("Conclave: %@", error.localizedDescription); out[name] = env[name] }
+        }
+        return out
+    }
+
+    /// Salva le chiavi (valore vuoto = cancella). Nel `.env` non devono restare copie vecchie:
+    /// il motore le leggerebbe ancora.
+    static func write(_ values: [String: String]) throws {
+        guard usesKeychain else { return try EnvFile.write(values) }
+        for (name, value) in values { try Keychain.conclave.write(name, value) }
+        try EnvFile.remove { values[$0] != nil }
+    }
+
+    /// Chiavi non vuote da mandare al motore sullo stdin (mai nell'ambiente né su disco).
+    static func engineKeys() -> [String: String] {
+        guard usesKeychain else { return [:] }
+        do { return try Keychain.conclave.readAll() }
+        catch { NSLog("Conclave: chiavi non lette dal Portachiavi: %@", error.localizedDescription); return [:] }
+    }
+
+    /// Una sola volta (e di nuovo se qualcuno rimette chiavi nel `.env`): sposta le variabili
+    /// `*_KEY`/`*_TOKEN` nel Portachiavi. Il `.env` si riscrive senza quelle righe solo se tutte
+    /// le scritture sono riuscite; altrimenti resta com'è e il motore continua a leggerlo.
+    static func migrateEnvFile() {
+        guard usesKeychain else { return }
+        let secrets = EnvFile.read().filter { isSecret($0.key) }
+        guard !secrets.isEmpty else { return }
+        do {
+            for (name, value) in secrets where !value.isEmpty { try Keychain.conclave.write(name, value) }
+            try EnvFile.remove(where: isSecret)
+        } catch {
+            NSLog("Conclave: chiavi non spostate nel Portachiavi, il file .env resta invariato: %@", error.localizedDescription)
+        }
     }
 }
 
@@ -134,6 +212,9 @@ struct CouncilModel { let label: String; let model: String; let fallback: [Strin
 @MainActor
 final class SettingsModel: ObservableObject {
     @Published var keys: [String: String] = [:]     // per provider id
+    /// Valori letti all'apertura: si salvano solo le chiavi cambiate, così una voce che non si è
+    /// potuta leggere (campo vuoto) non viene cancellata da un salvataggio.
+    private var loadedKeys: [String: String] = [:]
     @Published var tests: [String: TestState] = [:]
     @Published var dirty = false
     let providers: [String: ProviderConfig]
@@ -175,8 +256,9 @@ final class SettingsModel: ObservableObject {
 
     func reload() {
         loadCouncilModels()
-        let env = EnvFile.read()
-        keys = Dictionary(uniqueKeysWithValues: providers.map { ($0.key, env[$0.value.keyEnv] ?? "") })
+        let stored = KeyStore.read(providers.values.map(\.keyEnv))
+        keys = Dictionary(uniqueKeysWithValues: providers.map { ($0.key, stored[$0.value.keyEnv] ?? "") })
+        loadedKeys = keys
         tests = [:]
         dirty = false
     }
@@ -262,8 +344,9 @@ final class SettingsModel: ObservableObject {
 
     func save() throws {
         var values: [String: String] = [:]
-        for (id, p) in providers { values[p.keyEnv] = keys[id] ?? "" }
-        try EnvFile.write(values)
+        for (id, p) in providers where (keys[id] ?? "") != (loadedKeys[id] ?? "") { values[p.keyEnv] = keys[id] ?? "" }
+        try KeyStore.write(values)
+        loadedKeys = keys
         dirty = false
         onSaved?()
     }
@@ -657,7 +740,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("Le chiavi restano solo su questo Mac, nel file “.env” della cartella dati dell'app, leggibile solo dal tuo utente.")
+                Text("Le chiavi restano solo su questo Mac, nel Portachiavi di macOS (voci “Conclave – …” in Accesso Portachiavi).")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

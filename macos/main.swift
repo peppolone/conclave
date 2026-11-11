@@ -242,9 +242,10 @@ final class ServerController {
         do {
             try p.run()
             process = p
-            // Prima riga dello stdin: il token dell'API (vedi src/bootstrap.ts). Poi lo stdin resta
-            // aperto: quando l'app si chiude, il motore lo vede chiudersi e termina.
-            let hello = try JSONSerialization.data(withJSONObject: ["token": Engine.token])
+            // Prima riga dello stdin: il token dell'API e le chiavi dei provider dal Portachiavi
+            // (vedi src/bootstrap.ts), mai nell'ambiente: altri processi lo leggerebbero. Poi lo
+            // stdin resta aperto: quando l'app si chiude, il motore lo vede chiudersi e termina.
+            let hello = try JSONSerialization.data(withJSONObject: ["token": Engine.token, "keys": KeyStore.engineKeys()])
             try input.fileHandleForWriting.write(contentsOf: hello + Data("\n".utf8))
         } catch {
             onCrash?(String(format: L("Impossibile avviare il motore: %@"), error.localizedDescription))
@@ -309,8 +310,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        seedSettings()
         Paths.secure()
+        // Prima del motore e delle Impostazioni: le chiavi rimaste nel .env passano al Portachiavi.
+        KeyStore.migrateEnvFile()
         _ = AppLanguage.launched
         // Tema salvato (Sistema / Chiaro / Scuro) prima di creare la finestra.
         AppAppearance.apply()
@@ -352,19 +354,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         NSApp.dockTile.badgeLabel = nil
     }
 
-    /// Al primo avvio crea il file delle chiavi partendo dal modello incluso.
-    private func seedSettings() {
-        guard !FileManager.default.fileExists(atPath: Paths.envFile.path) else { return }
-        let example = Paths.serverDir.appendingPathComponent(".env.example")
-        try? FileManager.default.copyItem(at: example, to: Paths.envFile)
-    }
-
     private func buildWindow() {
         // Contenuto della finestra interamente nativo (SwiftUI).
         let root = ContentRoot(
             store: store,
             openSettings: { [weak self] in self?.openSettings(nil) },
-            openModels: { [weak self] in self?.seedSettings(); self?.settings.show(tab: .models) },
+            openModels: { [weak self] in self?.settings.show(tab: .models) },
             saveFile: { [weak self] name, text in self?.saveMarkdown(filename: name, text: text) })
         content = NSHostingView(rootView: root)
         content.isHidden = true
@@ -588,7 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
             let phase = d.phases.last?.title
             window.subtitle = phase.map { String(format: L("In corso — %@"), $0) } ?? L("In corso")
         } else {
-            if let r = d.rounds { parts.append(r == 0 ? L("senza round") : String(format: L("%d round"), r)) }
+            if let r = d.rounds { parts.append(r == 0 ? L("senza round") : (r == 1 ? L("1 round") : String(format: L("%d round"), r))) }
             if !d.participants.isEmpty { parts.append(String(format: L("%d modelli"), d.participants.count)) }
             if let s = d.startedAt { parts.append(Self.titleDate.string(from: s)) }
             if d.status != "done" { parts.append(CouncilStore.statusText(d.status)) }
@@ -923,7 +918,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
     }
 
     @objc func openSettings(_ sender: Any?) {
-        seedSettings()
         settings.show()
     }
 
