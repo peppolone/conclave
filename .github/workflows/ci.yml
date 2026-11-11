@@ -1,0 +1,51 @@
+# Controlli sulle pull request (i push su main sono coperti da release.yml).
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Strumenti
+        run: |
+          xcodebuild -version
+          node -v
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:chaos
+
+      - name: Compilazione dell'app
+        # Le PR non hanno i secrets del certificato: firma ad-hoc dichiarata.
+        env:
+          ALLOW_ADHOC: "1"
+        run: |
+          npm run app
+          codesign --verify --deep --strict dist/Conclave.app
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

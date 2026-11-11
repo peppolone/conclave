@@ -1,0 +1,70 @@
+name: Bug report
+description: Something does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never paste API keys, Claude credentials or private debate content.**
+        For security problems use [private vulnerability reporting](https://github.com/peppolone/conclave/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Select Gemini and Groq, 2 rounds, judge Claude
+        2. Ask "…"
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Conclave version
+      description: Settings ▸ About, or the DMG name.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "26.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Mac
+      options:
+        - Apple Silicon
+        - Intel
+    validations:
+      required: true
+  - type: checkboxes
+    id: providers
+    attributes:
+      label: Providers involved
+      options:
+        - label: Claude (Claude Code CLI)
+        - label: Gemini
+        - label: Groq
+        - label: OpenRouter
+        - label: Mistral
+        - label: Cerebras
+        - label: OpenAI
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        From `~/Library/Application Support/Conclave/server.log`. Keys are masked automatically,
+        but check before pasting. Only the lines around the problem.
+      render: text

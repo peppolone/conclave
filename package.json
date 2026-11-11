@@ -4,7 +4,15 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "description": "Consiglio di AI locale: più modelli discutono in 3 round, Claude giudica.",
+  "description": "Native macOS app where several AI models debate a question in rounds and a judge writes the verdict. Local-first.",
+  "homepage": "https://github.com/peppolone/conclave#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peppolone/conclave.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peppolone/conclave/issues"
+  },
   "engines": {
     "node": ">=24"
   },

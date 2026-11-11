@@ -19,4 +19,5 @@ CLAUDE.local.md
 
 # Note di lavoro e piani: solo in locale, non su GitHub
 /CLAUDE.md
-/docs/
+/docs/*
+!/docs/screenshots/
