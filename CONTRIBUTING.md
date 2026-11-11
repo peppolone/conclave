@@ -18,8 +18,8 @@ npm ci
 - `npm run app` — builds `dist/Conclave.app`; `npm run app:install` also copies it to
   `/Applications`.
 
-Without the project's signing certificate, local builds are signed ad-hoc and macOS asks again for
-Keychain access after each rebuild. This is expected.
+macOS asks again for Keychain access after each rebuild (there is no Apple Developer Team ID).
+This is expected.
 
 ## Checks before a pull request
 
