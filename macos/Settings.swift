@@ -154,43 +154,68 @@ enum KeyStore {
 
     static func isSecret(_ name: String) -> Bool { name.hasSuffix("_KEY") || name.hasSuffix("_TOKEN") }
 
+    /// Tutte le chiavi in una sola voce (JSON nome → valore). Senza Team ID Apple il Portachiavi
+    /// lega la voce alla singola build (partition list `cdhash:`): dopo un aggiornamento chiede
+    /// la password una volta per voce, quindi una voce sola = una sola richiesta ("Sempre").
+    /// La voce non si cancella mai (una build diversa non può: errSecInvalidOwnerEdit), si riscrive.
+    private static let account = "api-keys"
+
+    /// nil se la voce non esiste ancora.
+    private static func stored() throws -> [String: String]? {
+        guard let text = try Keychain.conclave.read(account) else { return nil }
+        guard let dict = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: String] else {
+            throw KeychainError(status: errSecDecode, account: account)
+        }
+        return dict
+    }
+
+    private static func store(_ keys: [String: String]) throws {
+        let data = try JSONSerialization.data(withJSONObject: keys.filter { !$0.value.isEmpty }, options: [.sortedKeys])
+        try Keychain.conclave.write(account, String(decoding: data, as: UTF8.self))
+    }
+
     /// Valori delle variabili indicate. Una chiave rimasta nel `.env` (passaggio al Portachiavi
-    /// non riuscito) vale finché non c'è la voce nel Portachiavi: il motore la usa ancora.
+    /// non riuscito) vale finché non è nel Portachiavi: il motore la usa ancora.
     static func read(_ names: [String]) -> [String: String] {
         let env = EnvFile.read()
         guard usesKeychain else { return env }
+        let keys: [String: String]
+        do { keys = try stored() ?? [:] }
+        catch { NSLog("Conclave: %@", error.localizedDescription); keys = [:] }
         var out: [String: String] = [:]
-        for name in names {
-            do { out[name] = try Keychain.conclave.read(name) ?? env[name] }
-            catch { NSLog("Conclave: %@", error.localizedDescription); out[name] = env[name] }
-        }
+        for name in names { out[name] = keys[name] ?? env[name] }
         return out
     }
 
-    /// Salva le chiavi (valore vuoto = cancella). Nel `.env` non devono restare copie vecchie:
-    /// il motore le leggerebbe ancora.
+    /// Salva le chiavi indicate (valore vuoto = toglie). Se la voce esiste ma non si legge, non si
+    /// scrive nulla: riscriverla perderebbe le altre chiavi. Nel `.env` non devono restare copie
+    /// vecchie: il motore le leggerebbe ancora.
     static func write(_ values: [String: String]) throws {
         guard usesKeychain else { return try EnvFile.write(values) }
-        for (name, value) in values { try Keychain.conclave.write(name, value) }
+        var keys = try stored() ?? [:]
+        for (name, value) in values { keys[name] = value.isEmpty ? nil : value }
+        try store(keys)
         try EnvFile.remove { values[$0] != nil }
     }
 
     /// Chiavi non vuote da mandare al motore sullo stdin (mai nell'ambiente né su disco).
     static func engineKeys() -> [String: String] {
         guard usesKeychain else { return [:] }
-        do { return try Keychain.conclave.readAll() }
+        do { return try stored() ?? [:] }
         catch { NSLog("Conclave: chiavi non lette dal Portachiavi: %@", error.localizedDescription); return [:] }
     }
 
     /// Una sola volta (e di nuovo se qualcuno rimette chiavi nel `.env`): sposta le variabili
-    /// `*_KEY`/`*_TOKEN` nel Portachiavi. Il `.env` si riscrive senza quelle righe solo se tutte
-    /// le scritture sono riuscite; altrimenti resta com'è e il motore continua a leggerlo.
+    /// `*_KEY`/`*_TOKEN` nel Portachiavi. Il `.env` si riscrive senza quelle righe solo se la
+    /// scrittura è riuscita; altrimenti resta com'è e il motore continua a leggerlo.
     static func migrateEnvFile() {
         guard usesKeychain else { return }
         let secrets = EnvFile.read().filter { isSecret($0.key) }
         guard !secrets.isEmpty else { return }
         do {
-            for (name, value) in secrets where !value.isEmpty { try Keychain.conclave.write(name, value) }
+            var keys = try stored() ?? [:]
+            for (name, value) in secrets where !value.isEmpty { keys[name] = value }
+            try store(keys)
             try EnvFile.remove(where: isSecret)
         } catch {
             NSLog("Conclave: chiavi non spostate nel Portachiavi, il file .env resta invariato: %@", error.localizedDescription)

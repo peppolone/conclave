@@ -1,7 +1,7 @@
-// Chiavi API nel Portachiavi di macOS (quello tradizionale, a file).
-// L'app è firmata con un certificato stabile: le voci create da lei restano sue tra le versioni,
-// senza richiesta di password. Niente Portachiavi "data protection" né access group: richiedono
-// un team Apple.
+// Voci del Portachiavi di macOS (quello tradizionale, a file). Niente Portachiavi "data
+// protection" né access group: richiedono un team Apple. Senza Team ID la partition list lega
+// ogni voce alla build che l'ha creata: dopo un aggiornamento macOS chiede la password una volta
+// per voce (vedi `KeyStore` in Settings.swift).
 
 import Foundation
 import Security
@@ -59,30 +59,5 @@ struct Keychain {
     func delete(_ account: String) throws {
         let status = SecItemDelete(query(account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status, account: account) }
-    }
-
-    /// Nomi delle voci del servizio. Solo attributi: il Portachiavi tradizionale non restituisce
-    /// i valori di più voci in una sola ricerca.
-    func accounts() throws -> [String] {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                kSecAttrService as String: service,
-                                kSecReturnAttributes as String: true,
-                                kSecMatchLimit as String: kSecMatchLimitAll]
-        var out: CFTypeRef?
-        let status = SecItemCopyMatching(q as CFDictionary, &out)
-        if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess else { throw KeychainError(status: status, account: "*") }
-        return (out as? [[String: Any]] ?? []).compactMap { $0[kSecAttrAccount as String] as? String }
-    }
-
-    /// Valori non vuoti delle voci indicate (tutte quelle del servizio se `names` è nil).
-    /// Una voce illeggibile si salta (e si registra): non deve far perdere le altre.
-    func readAll(_ names: [String]? = nil) throws -> [String: String] {
-        var out: [String: String] = [:]
-        for name in try names ?? accounts() {
-            do { if let v = try read(name), !v.isEmpty { out[name] = v } }
-            catch { NSLog("Conclave: %@", error.localizedDescription) }
-        }
-        return out
     }
 }
