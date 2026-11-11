@@ -10,6 +10,8 @@ concurrency:
 
 permissions:
   contents: read
+  # gitleaks-action legge l'elenco dei commit della PR.
+  pull-requests: read
 
 jobs:
   build:
