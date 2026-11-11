@@ -5,9 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-11 — Beta 1
 
-First public release.
+First public release: a **beta, work in progress**. Expect rough edges and changes between
+versions.
 
 ### Added
 
@@ -37,6 +38,13 @@ First public release.
 ### Security
 
 - API keys stored in the macOS Keychain and passed to the engine on standard input.
+
+### Known issues
+
+- The app is not notarized: the first launch needs "Open Anyway" in System Settings ▸ Privacy &
+  Security.
+- Without an Apple Developer Team ID, macOS asks once for your login password to read the API keys
+  after each update (choose "Always Allow").
 - Local engine bound to `127.0.0.1`, `Host` header check, per-session bearer token.
 - Secrets masked in provider errors and in `server.log`.
 - Data folder `0700`, files `0600`; atomic writes for settings and health cache.

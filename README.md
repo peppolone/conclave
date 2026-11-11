@@ -9,6 +9,13 @@ providers you configure. No account, no server, no telemetry.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS 26+](https://img.shields.io/badge/macOS-26%2B-black)
 ![Apple Silicon and Intel](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universal-black)
+![Status: beta](https://img.shields.io/badge/status-beta%201-orange)
+[![Release](https://github.com/peppolone/conclave/actions/workflows/release.yml/badge.svg)](https://github.com/peppolone/conclave/actions/workflows/release.yml)
+
+> [!WARNING]
+> **Beta 1 — work in progress.** Conclave is under active development: expect rough edges, missing
+> features and changes between versions. Bug reports and feedback are welcome in
+> [Issues](https://github.com/peppolone/conclave/issues).
 
 ![Composer](docs/screenshots/composer.png)
 ![A finished debate with the verdict](docs/screenshots/debate.png)
@@ -163,10 +170,6 @@ Two parts that talk only over local HTTP (JSON API + Server-Sent Events):
   runtime npm dependencies). It orchestrates the rounds (`src/debate/`), calls providers through
   an OpenAI-compatible adapter or the Claude CLI (`src/adapters/`), checks model health at launch
   and stores debates in SQLite (`node:sqlite`).
-
-## Acknowledgements
-
-Inspired by Andrej Karpathy's [LLM Council](https://github.com/karpathy/llm-council).
 
 ## License
 
