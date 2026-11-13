@@ -110,6 +110,9 @@ struct ComposerView: View {
     var openSettings: () -> Void
     var openModels: () -> Void
     @FocusState private var focused: Bool
+    /// File trascinati sopra il riquadro della domanda.
+    @State private var dropTargeted = false
+    @State private var pasteMonitor = AttachmentPasteMonitor()
 
     private var hasOtherVoices: Bool { store.voices.contains { !$0.isClaude } }
     private var troubled: [VoiceInfo] { store.voices.filter { $0.problem != nil } }
@@ -145,7 +148,13 @@ struct ComposerView: View {
                 .frame(maxWidth: .infinity, minHeight: geo.size.height)
             }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            pasteMonitor.start { [store] urls, image in
+                if let image { store.addPastedImage(image) } else { store.addAttachments(urls) }
+            }
+        }
+        .onDisappear { pasteMonitor.stop() }
     }
 
     // MARK: Benvenuto
@@ -195,6 +204,20 @@ struct ComposerView: View {
                 .focused($focused)
                 .accessibilityLabel(L("Domanda"))
 
+            if !store.attachments.isEmpty {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(store.attachments) { a in
+                        AttachmentChip(item: a) { store.removeAttachment(a.id) }
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(L("Allegati"))
+            }
+
+            if store.questionLength > AttachmentLimits.questionWarning {
+                questionCounter
+            }
+
             Rectangle().fill(Brand.hairline).frame(height: 1).accessibilityHidden(true)
 
             Text(L("Partecipano"))
@@ -221,13 +244,49 @@ struct ComposerView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(L("Partecipano"))
 
+                IconButton(L("Allega file…"), symbol: "paperclip",
+                           help: String(format: L("Allega PDF, file di testo o immagini (al massimo %d). Puoi anche trascinarli qui o incollarli."),
+                                        AttachmentLimits.maxFiles)) {
+                    chooseAttachments { store.addAttachments($0) }
+                }
+                .disabled(store.attachments.count >= AttachmentLimits.maxFiles)
+
                 sendButton
             }
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
         .padding(.bottom, 14)
-        .surfaceBox(radius: 20, stroke: focused ? Brand.accent.opacity(0.45) : Brand.hairline, shadow: true)
+        .surfaceBox(radius: 20, stroke: dropTargeted ? Brand.accent : focused ? Brand.accent.opacity(0.45) : Brand.hairline, shadow: true)
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Brand.accent.opacity(0.06))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty else { return false }
+            store.addAttachments(files)
+            return true
+        } isTargeted: { dropTargeted = $0 }
+    }
+
+    /// "15.234 / 20.000": compare vicino al limite; colore di avviso, di pericolo oltre il limite.
+    private var questionCounter: some View {
+        let n = store.questionLength, max = AttachmentLimits.maxQuestion
+        return HStack {
+            Spacer()
+            Text(verbatim: "\(formatCount(n)) / \(formatCount(max))")
+                .font(.caption.weight(.medium))
+                .monospacedDigit()
+                .foregroundStyle(n > max ? Brand.danger : Brand.warning)
+                .help(n > max ? String(format: L("La domanda supera il limite di %@ caratteri: accorciala per avviare il dibattito."), formatCount(max))
+                      : String(format: L("La domanda può avere al massimo %@ caratteri."), formatCount(max)))
+                .accessibilityLabel(String(format: L("%@ caratteri su %@"), formatCount(n), formatCount(max)))
+        }
     }
 
     private var sendButton: some View {
@@ -248,7 +307,9 @@ struct ComposerView: View {
         .buttonStyle(.plain)
         .disabled(!store.canStart)
         .keyboardShortcut(.return, modifiers: .command)
-        .help(L("Avvia il dibattito (⌘↩)"))
+        .help(store.questionTooLong
+              ? String(format: L("La domanda supera il limite di %@ caratteri: accorciala per avviare il dibattito."), formatCount(AttachmentLimits.maxQuestion))
+              : store.attachmentProblem ?? L("Avvia il dibattito (⌘↩)"))
         .accessibilityLabel(L("Avvia il dibattito"))
     }
 
@@ -293,6 +354,16 @@ struct ComposerView: View {
             .help(L("Chi emette il verdetto"))
             .accessibilityLabel(L("Giudice"))
 
+            Toggle(isOn: $store.webSearch) {
+                Label(L("Cerca sul web"), systemImage: "globe")
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .disabled(!store.webSearchAvailable)
+            .help(store.webSearchHelp)
+            .accessibilityLabel(L("Cerca sul web"))
+            .accessibilityHint(store.webSearchHelp)
+
             Spacer(minLength: 8)
 
             if store.canEstimate {
@@ -316,6 +387,16 @@ struct ComposerView: View {
 
     @ViewBuilder private var messages: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let n = store.attachmentNotice {
+                Label(n, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(Brand.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let p = store.attachmentProblem, !store.attachments.contains(where: \.loading) {
+                Label(p, systemImage: "exclamationmark.circle")
+                    .foregroundStyle(Brand.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let err = store.startError {
                 Label(err, systemImage: "exclamationmark.circle")
                     .foregroundStyle(Brand.danger)
@@ -654,6 +735,16 @@ struct DebateView: View {
                 questionText
             }
 
+            if !debate.attachments.isEmpty {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(Array(debate.attachments.enumerated()), id: \.offset) { _, a in
+                        AttachmentTag(meta: a)
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(L("Allegati"))
+            }
+
             Group {
                 if debate.isRunning {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in metaRow }
@@ -875,7 +966,7 @@ struct DebateView: View {
     // MARK: Svolgimento (dibattito concluso)
 
     private var courseHeading: some View {
-        let answers = debate.phases.reduce(0) { $0 + $1.cards.filter { $0.text != nil }.count }
+        let answers = debate.phases.filter { $0.id != "research" }.reduce(0) { $0 + $1.cards.filter { $0.text != nil }.count }
         let rounds = store.roundCount(debate)
         let scope = rounds == 0 ? L("Solo risposte iniziali") : (rounds == 1 ? L("Risposte iniziali e 1 round") : String(format: L("Risposte iniziali e %d round"), rounds))
         let count = answers == 1 ? L("1 risposta") : String(format: L("%d risposte"), answers)
@@ -926,7 +1017,8 @@ struct DebateView: View {
             else { withAnimation(.easeOut(duration: 0.18)) { setExpanded(p.id, !open) } }
         }
         // Card per riga: due se la colonna delle card (contenuto meno numero e spazio) è larga.
-        let cols = contentWidth - 42 >= 652 ? 2 : 1
+        // La ricerca ha una sola card (il dossier): sempre a tutta larghezza.
+        let cols = p.id != "research" && contentWidth - 42 >= 652 ? 2 : 1
         let rows = open && !p.cards.isEmpty
             ? stride(from: 0, to: p.cards.count, by: cols).map { Array(p.cards[$0..<min($0 + cols, p.cards.count)]) }
             : []
@@ -1377,6 +1469,19 @@ private struct CardView: View {
                     }
                     .font(.body)
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                } else if card.id.hasPrefix("research") {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Ricerca sul web non riuscita").fontWeight(.semibold)
+                            Text(err).foregroundStyle(.secondary)
+                            Text("Il dibattito continua senza i risultati della ricerca.").foregroundStyle(.secondary)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(Brand.warning)
+                    }
+                    .font(.body)
                     .textSelection(.enabled)
                 } else {
                     Label {

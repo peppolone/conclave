@@ -75,12 +75,14 @@ struct DebateState: Equatable {
     var verdictBy: String?
     var participants: [String: (label: String, letter: String)] = [:]
     var judging = false       // il giudice sta scrivendo il verdetto
+    var attachments: [AttachmentMeta] = []
+    var webSearch = false     // richiesta la ricerca sul web prima del dibattito
     var isRunning: Bool { status == "running" }
 
     static func == (a: DebateState, b: DebateState) -> Bool {
         a.id == b.id && a.status == b.status && a.phases == b.phases && a.verdict == b.verdict
             && a.statusText == b.statusText && a.question == b.question && a.title == b.title && a.finishedAt == b.finishedAt
-            && a.judging == b.judging
+            && a.judging == b.judging && a.attachments == b.attachments && a.webSearch == b.webSearch
     }
 }
 
@@ -97,6 +99,10 @@ final class CouncilStore: ObservableObject {
     @Published var rounds = 3 { didSet { persist(rounds, "council.rounds") } }
     @Published var judge = "claude" { didSet { persist(judge, "council.judge") } }
     @Published var claudeModel = "sonnet" { didSet { persist(claudeModel, "council.claudeModel") } }
+    @Published var webSearch = false { didSet { persist(webSearch, "council.webSearch") } }
+    /// Ricerca sul web possibile (`GET /api/models` → `webSearch`) e chi la farebbe.
+    @Published var webSearchAvailable = false
+    @Published var webSearchVia: String?
     /// true mentre si allineano le scelte ai modelli disponibili: un modello che all'avvio
     /// non risponde ancora sparisce dalla scelta mostrata, ma non da quella salvata.
     private var syncing = false
@@ -109,6 +115,9 @@ final class CouncilStore: ObservableObject {
     @Published var parent: ParentRef?
     @Published var startError: String?
     @Published var starting = false
+    /// File allegati alla prossima domanda e ultimo avviso sugli allegati (limite, file non supportato).
+    @Published var attachments: [AttachmentItem] = []
+    @Published var attachmentNotice: String?
 
     // Dibattito mostrato (nil = composer)
     @Published var current: DebateState?
@@ -130,8 +139,12 @@ final class CouncilStore: ObservableObject {
     private var loadedPrefs = false
     private let defaults = UserDefaults.standard
 
+    /// Fasi dei round: la posizione è il numero del round (0 = risposte iniziali).
     static let phaseOrder = ["initial", "critique", "revise", "final"]
+    /// Ordine di visualizzazione: la ricerca sul web precede le risposte.
+    static let phaseSort = ["research"] + phaseOrder
     static let phaseTitles = [
+        "research": L("Ricerca sul web"),
         "initial": L("Risposte iniziali"),
         "critique": L("Round 1 · Critica incrociata"),
         "revise": L("Round 2 · Revisione"),
@@ -185,6 +198,9 @@ final class CouncilStore: ObservableObject {
         lockedCount = all.count - voices.count
         checking = j["checking"] as? Bool ?? false
         if let cm = j["claudeModels"] as? [String], !cm.isEmpty { claudeModels = cm }
+        let ws = j["webSearch"] as? [String: Any]
+        webSearchAvailable = ws?["available"] as? Bool ?? false
+        webSearchVia = ws?["via"] as? String
 
         // Le scelte salvate sono la fonte: ogni scelta dell'utente si salva subito, quindi a ogni
         // ricarica si ripartono da lì (una voce tornata disponibile torna scelta). Quelle che ora
@@ -199,6 +215,7 @@ final class CouncilStore: ObservableObject {
         if judge != "claude" && !voices.contains(where: { $0.id == judge }) { judge = "claude" }
         claudeModel = defaults.string(forKey: "council.claudeModel") ?? d["claudeModel"] as? String ?? "sonnet"
         if !claudeModels.contains(claudeModel) { claudeModel = claudeModels.first ?? "sonnet" }
+        webSearch = defaults.bool(forKey: "council.webSearch")
         syncing = false
         loadedPrefs = true
 
@@ -240,6 +257,92 @@ final class CouncilStore: ObservableObject {
 
     var canStart: Bool {
         engineReady && !starting && orderedSelection.count >= 2 && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !questionTooLong && attachmentProblem == nil
+    }
+
+    /// Lunghezza della domanda come la conta il motore (unità UTF-16).
+    var questionLength: Int { question.utf16.count }
+    var questionTooLong: Bool { questionLength > AttachmentLimits.maxQuestion }
+
+    /// Caratteri di tutti gli allegati pronti.
+    var attachmentsTotal: Int { attachments.reduce(0) { $0 + $1.chars } }
+
+    /// Motivo per cui gli allegati impediscono l'avvio (nil se si può partire).
+    var attachmentProblem: String? {
+        if attachments.contains(where: \.loading) { return L("Attendi la lettura degli allegati.") }
+        if attachments.contains(where: { $0.error != nil }) { return L("Togli gli allegati che non si possono leggere.") }
+        if attachmentsTotal > AttachmentLimits.maxTotal {
+            return String(format: L("Allegati troppo lunghi: %@ caratteri in tutto, al massimo %@. Togline qualcuno."),
+                          formatCount(attachmentsTotal), formatCount(AttachmentLimits.maxTotal))
+        }
+        return nil
+    }
+
+    /// Ricerca sul web richiesta e possibile: è ciò che si invia al motore.
+    var webSearchActive: Bool { webSearch && webSearchAvailable }
+
+    /// Spiegazione dell'interruttore "Cerca sul web".
+    var webSearchHelp: String {
+        guard webSearchAvailable else {
+            return L("Ricerca sul web non disponibile: nessun modello configurato può cercare sul web.")
+        }
+        let via = webSearchVia.map { String(format: L("La ricerca la fa %@"), $0) } ?? ""
+        return L("Prima del dibattito un modello cerca sul web informazioni aggiornate e le passa a tutti i partecipanti.")
+            + (via.isEmpty ? "" : " " + via + ".")
+    }
+
+    // MARK: Allegati
+
+    /// Aggiunge file come allegati e ne legge il testo in background.
+    func addAttachments(_ urls: [URL]) {
+        attachmentNotice = nil
+        var skipped: [String] = []
+        for url in urls {
+            guard attachments.count < AttachmentLimits.maxFiles else {
+                attachmentNotice = String(format: L("Al massimo %d allegati: gli altri file non sono stati aggiunti."), AttachmentLimits.maxFiles)
+                break
+            }
+            guard let kind = AttachmentReader.kind(of: url) else { skipped.append(url.lastPathComponent); continue }
+            let item = AttachmentItem(name: String(url.lastPathComponent.prefix(AttachmentLimits.maxName)), kind: kind)
+            attachments.append(item)
+            load(item.id) { try AttachmentReader.read(url, kind: kind) }
+        }
+        if !skipped.isEmpty, attachmentNotice == nil {
+            attachmentNotice = String(format: L("Tipo di file non supportato: %@. Si possono allegare PDF, file di testo e immagini."),
+                                      skipped.joined(separator: ", "))
+        }
+    }
+
+    /// Immagine incollata dagli appunti: se ne riconosce il testo.
+    func addPastedImage(_ data: Data) {
+        attachmentNotice = nil
+        guard attachments.count < AttachmentLimits.maxFiles else {
+            attachmentNotice = String(format: L("Al massimo %d allegati: gli altri file non sono stati aggiunti."), AttachmentLimits.maxFiles)
+            return
+        }
+        let item = AttachmentItem(name: L("Immagine incollata"), kind: .image)
+        attachments.append(item)
+        load(item.id) { try AttachmentReader.readImage(data) }
+    }
+
+    func removeAttachment(_ id: UUID) {
+        attachments.removeAll { $0.id == id }
+        attachmentNotice = nil
+    }
+
+    private func load(_ id: UUID, _ read: @escaping @Sendable () throws -> String) {
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { Result { try read() } }.value
+            guard let self, let i = self.attachments.firstIndex(where: { $0.id == id }) else { return }
+            switch result {
+            case .success(let text):
+                let cut = AttachmentReader.truncate(text, to: AttachmentLimits.maxChars)
+                self.attachments[i].text = cut
+                self.attachments[i].truncated = cut.utf16.count < text.utf16.count
+            case .failure(let e):
+                self.attachments[i].error = e.localizedDescription
+            }
+        }
     }
 
     /// Chiamate previste ai modelli (verdetto escluso): una per partecipante a ogni fase.
@@ -275,13 +378,22 @@ final class CouncilStore: ObservableObject {
         var body: [String: Any] = ["question": q, "models": orderedSelection, "rounds": rounds,
                                    "judge": judge, "claudeModel": claudeModel]
         if let parent { body["parentId"] = parent.id }
+        let sent = attachments.compactMap { a in a.text.map { (a, $0) } }
+        if !sent.isEmpty { body["attachments"] = sent.map { ["name": $0.0.name, "kind": $0.0.kind.rawValue, "text": $0.1] } }
+        let web = webSearchActive
+        if web { body["webSearch"] = true }
         do {
             let data = try await request("POST", "/api/debates", body: body)
             guard let id = json(data)["id"] as? Int else { throw URLError(.badServerResponse) }
             question = ""
             parent = nil
-            current = DebateState(id: id, question: q, rounds: rounds, judgeLabel: judgeLabel, parentId: body["parentId"] as? Int,
-                                  status: "running", statusText: Self.statusText("running"), startedAt: .now)
+            attachments = []
+            attachmentNotice = nil
+            var d = DebateState(id: id, question: q, rounds: rounds, judgeLabel: judgeLabel, parentId: body["parentId"] as? Int,
+                                status: "running", statusText: Self.statusText("running"), startedAt: .now)
+            d.attachments = sent.map { AttachmentMeta(name: $0.0.name, kind: $0.0.kind, chars: $0.0.chars) }
+            d.webSearch = web
+            current = d
             onCurrentChanged?(id)
             onHistoryChanged?()
             listen(id)
@@ -368,11 +480,12 @@ final class CouncilStore: ObservableObject {
             if let i = d.phases.firstIndex(where: { $0.id == phase }) {
                 if let note { d.phases[i].note = note }
             } else {
-                // Le voci ancora in gioco ricevono una card in attesa.
-                let active = note == nil ? activeIds(d) : []
+                // Le voci ancora in gioco ricevono una card in attesa; la ricerca ne ha una sola.
+                let active = note != nil ? [] : phase == "research" ? ["research"] : activeIds(d)
                 d.phases.append(PhaseState(id: phase, title: Self.phaseTitles[phase] ?? phase, note: note,
                                            cards: active.map { CardState(id: $0, title: title(for: $0, in: d)) },
                                            startedAt: .now))
+                d.phases.sort { Self.sortIndex($0.id) < Self.sortIndex($1.id) }
             }
             d.statusText = "\(Self.phaseTitles[phase] ?? phase)…"
         case "message":
@@ -432,6 +545,12 @@ final class CouncilStore: ObservableObject {
     }
 
     private func title(for modelId: String, in d: DebateState) -> String {
+        if modelId == "research" { return L("Ricerca sul web") }
+        if modelId.hasPrefix("research:") {
+            let id = String(modelId.dropFirst(9))
+            let name = id == "claude" ? "Claude" : d.participants[id]?.label ?? voices.first { $0.id == id }?.label ?? id
+            return String(format: L("Ricerca sul web · %@"), name)
+        }
         if let p = d.participants[modelId] { return p.letter.isEmpty ? p.label : String(format: L("%@ · Risposta %@"), p.label, p.letter) }
         return voices.first { $0.id == modelId }?.label ?? modelId
     }
@@ -443,13 +562,19 @@ final class CouncilStore: ObservableObject {
             pi = d.phases.count - 1
         }
         var ci = d.phases[pi!].cards.firstIndex { $0.id == modelId }
+        if ci == nil, phase == "research" {
+            // La card in attesa della ricerca ("research") lascia il posto all'esito di chi l'ha fatta.
+            d.phases[pi!].cards.removeAll { $0.waiting }
+        }
         if ci == nil {
             d.phases[pi!].cards.append(CardState(id: modelId, title: title(for: modelId, in: d)))
             ci = d.phases[pi!].cards.count - 1
         }
         change(&d.phases[pi!].cards[ci!])
-        d.phases.sort { (Self.phaseOrder.firstIndex(of: $0.id) ?? 9) < (Self.phaseOrder.firstIndex(of: $1.id) ?? 9) }
+        d.phases.sort { Self.sortIndex($0.id) < Self.sortIndex($1.id) }
     }
+
+    static func sortIndex(_ phase: String) -> Int { phaseSort.firstIndex(of: phase) ?? 9 }
 
     // MARK: Apertura, nuova discussione, annullamento
 
@@ -467,6 +592,7 @@ final class CouncilStore: ObservableObject {
                             statusText: Self.statusText(status), startedAt: Self.date(j["created_at"]),
                             finishedAt: Self.date(j["finished_at"]))
         d.title = j["title"] as? String
+        d.webSearch = opts?["webSearch"] as? Bool ?? false
         if let o = opts, let jid = o["judge"] as? String {
             d.judgeLabel = jid == "claude" ? "Claude \((o["claudeModel"] as? String ?? "sonnet").capitalized)"
                 : (voices.first { $0.id == jid }?.label ?? jid)
@@ -476,6 +602,15 @@ final class CouncilStore: ObservableObject {
            let c = (meta["content"] as? String)?.data(using: .utf8),
            let parts = try? JSONSerialization.jsonObject(with: c) as? [[String: Any]] {
             for p in parts { if let pid = p["id"] as? String { d.participants[pid] = (p["label"] as? String ?? pid, p["letter"] as? String ?? "") } }
+        }
+        if let att = messages.first(where: { ($0["model_id"] as? String) == "_attachments" }),
+           let c = (att["content"] as? String)?.data(using: .utf8),
+           let list = try? JSONSerialization.jsonObject(with: c) as? [[String: Any]] {
+            d.attachments = list.compactMap { a in
+                guard let name = a["name"] as? String else { return nil }
+                return AttachmentMeta(name: name, kind: AttachmentKind(rawValue: a["kind"] as? String ?? "") ?? .text,
+                                      chars: a["chars"] as? Int ?? 0)
+            }
         }
         if (j["live"] as? Bool) == true {
             // Dibattito in corso: lo stream rimanda tutti gli eventi dall'inizio. Se lo si sta già
@@ -492,7 +627,7 @@ final class CouncilStore: ObservableObject {
         for m in messages {
             let mid = m["model_id"] as? String ?? ""
             let phase = m["phase"] as? String ?? ""
-            if mid == "_meta" { continue }
+            if mid == "_meta" || mid == "_attachments" { continue }
             if mid == "_note" {
                 if let i = d.phases.firstIndex(where: { $0.id == phase }) { d.phases[i].note = m["content"] as? String }
                 else { d.phases.append(PhaseState(id: phase, title: Self.phaseTitles[phase] ?? phase, note: m["content"] as? String, cards: [])) }
@@ -511,6 +646,7 @@ final class CouncilStore: ObservableObject {
                 $0.replaced = m["replaced"] as? String
             }
         }
+        d.phases.sort { Self.sortIndex($0.id) < Self.sortIndex($1.id) }
         d.verdict = j["verdict"] as? String
         current = d
     }
@@ -579,6 +715,7 @@ final class CouncilStore: ObservableObject {
         var parts: [(symbol: String, text: String)] = []
         if let r = d.rounds { parts.append(("arrow.triangle.2.circlepath", r == 0 ? L("senza round") : (r == 1 ? L("1 round") : String(format: L("%d round"), r)))) }
         if let j = d.judgeLabel { parts.append(("person.fill.checkmark", String(format: L("giudice %@"), j))) }
+        if d.webSearch { parts.append(("globe", L("con ricerca sul web"))) }
         if let s = d.startedAt {
             let end = d.finishedAt ?? (d.isRunning ? Date.now : nil)
             if let end {
@@ -592,7 +729,11 @@ final class CouncilStore: ObservableObject {
 
     func exportMarkdown() -> (filename: String, text: String)? {
         guard let d = current else { return nil }
-        var out = ["# \(d.displayTitle)", "", "> " + d.question.replacingOccurrences(of: "\n", with: "\n> "), "", "_\(meta(d))_", ""]
+        var out = ["# \(d.displayTitle)", "", "> " + d.question.replacingOccurrences(of: "\n", with: "\n> "), ""]
+        if !d.attachments.isEmpty {
+            out += ["**" + L("Allegati") + ":** " + d.attachments.map { "\($0.name) (\(charsText($0.chars)))" }.joined(separator: ", "), ""]
+        }
+        out += ["_\(meta(d))_", ""]
         if let v = d.verdict { out += ["## " + L("Verdetto"), "", v, ""] }
         for p in d.phases {
             out += ["## \(p.title)", ""]
@@ -625,14 +766,17 @@ struct DebateStep: Identifiable, Equatable {
 
 extension CouncilStore {
     static let phaseShortNames = [
+        "research": L("Ricerca"),
         "initial": L("Risposte"), "critique": L("Critica"), "revise": L("Revisione"),
         "final": L("Posizione finale"), "verdict": L("Verdetto"),
     ]
     static let phaseNames = [
+        "research": L("Ricerca sul web"),
         "initial": L("Risposte iniziali"), "critique": L("Critica incrociata"), "revise": L("Revisione"),
         "final": L("Posizione finale"), "verdict": L("Verdetto"),
     ]
     static let phaseDescriptions = [
+        "research": L("Prima del dibattito un modello cerca sul web informazioni aggiornate e le passa a tutti i partecipanti."),
         "initial": L("Ogni modello risponde alla domanda da solo, senza vedere le risposte degli altri."),
         "critique": L("Ogni modello legge le risposte anonime degli altri e ne indica errori e punti deboli."),
         "revise": L("Ogni modello rivede la propria risposta tenendo conto delle critiche ricevute."),
@@ -642,13 +786,14 @@ extension CouncilStore {
 
     /// Numero di round del dibattito (0–3).
     func roundCount(_ d: DebateState) -> Int {
-        d.rounds ?? max(0, d.phases.filter { $0.id != "initial" }.count)
+        d.rounds ?? max(0, d.phases.filter { $0.id != "initial" && $0.id != "research" }.count)
     }
 
     /// Intestazione numerata della fase: "Apertura · Risposte iniziali", "Round 2 di 3 · Revisione".
     func phaseHeading(_ id: String, in d: DebateState) -> String {
         let name = Self.phaseNames[id] ?? id
         switch id {
+        case "research": return String(format: L("Preparazione · %@"), name)
         case "initial": return String(format: L("Apertura · %@"), name)
         case "verdict": return String(format: L("Chiusura · %@"), name)
         default:
@@ -660,6 +805,7 @@ extension CouncilStore {
     /// Riga sopra il nome della fase: "Apertura", "Round 2 di 3", "Chiusura".
     func phaseEyebrow(_ id: String, in d: DebateState) -> String {
         switch id {
+        case "research": return L("Preparazione")
         case "initial": return L("Apertura")
         case "verdict": return L("Chiusura")
         default:
@@ -677,7 +823,8 @@ extension CouncilStore {
 
     /// Passi del dibattito in ordine: risposte, round previsti, verdetto.
     func steps(_ d: DebateState) -> [DebateStep] {
-        let ids = ["initial"] + Array(Self.phaseOrder.dropFirst().prefix(roundCount(d))) + ["verdict"]
+        let research = d.webSearch || d.phases.contains { $0.id == "research" }
+        let ids = (research ? ["research"] : []) + ["initial"] + Array(Self.phaseOrder.dropFirst().prefix(roundCount(d))) + ["verdict"]
         var out: [DebateStep] = []
         for (k, id) in ids.enumerated() {
             let laterStarted = ids[(k + 1)...].contains { later in
@@ -710,7 +857,7 @@ extension CouncilStore {
                 total += p.cards.count
                 done += p.cards.filter { !$0.waiting }.count
             } else if s.state == .pending {
-                total += active
+                total += s.id == "research" ? 1 : active
             }
         }
         total += 1
