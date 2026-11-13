@@ -5,13 +5,13 @@
   "private": true,
   "type": "module",
   "description": "Native macOS app where several AI models debate a question in rounds and a judge writes the verdict. Local-first.",
-  "homepage": "https://github.com/peppolone/conclave#readme",
+  "homepage": "https://github.com/peppolone/Conclave#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/peppolone/conclave.git"
+    "url": "git+https://github.com/peppolone/Conclave.git"
   },
   "bugs": {
-    "url": "https://github.com/peppolone/conclave/issues"
+    "url": "https://github.com/peppolone/Conclave/issues"
   },
   "engines": {
     "node": ">=24"

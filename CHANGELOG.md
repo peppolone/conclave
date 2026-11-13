@@ -50,4 +50,4 @@ versions.
 - Data folder `0700`, files `0600`; atomic writes for settings and health cache.
 - Claude CLI run without tools, MCP servers or user settings, and stopped on shutdown.
 
-[0.1.0]: https://github.com/peppolone/conclave/releases/tag/v0.1.0
+[0.1.0]: https://github.com/peppolone/Conclave/releases/tag/v0.1.0

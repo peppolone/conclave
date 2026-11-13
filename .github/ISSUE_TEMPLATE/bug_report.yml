@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for reporting. **Never paste API keys, Claude credentials or private debate content.**
-        For security problems use [private vulnerability reporting](https://github.com/peppolone/conclave/security/advisories/new) instead.
+        For security problems use [private vulnerability reporting](https://github.com/peppolone/Conclave/security/advisories/new) instead.
   - type: textarea
     id: what
     attributes:

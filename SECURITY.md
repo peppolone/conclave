@@ -15,7 +15,7 @@ security fixes; please update before reporting.
 Please **do not open a public issue** for security problems.
 
 Report privately through GitHub:
-[**Security ▸ Report a vulnerability**](https://github.com/peppolone/conclave/security/advisories/new)
+[**Security ▸ Report a vulnerability**](https://github.com/peppolone/Conclave/security/advisories/new)
 (private vulnerability reporting). Include the Conclave version, macOS version, Mac model
 (Apple Silicon or Intel), steps to reproduce and the impact you expect.
 

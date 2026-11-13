@@ -11,8 +11,8 @@ enum UpdateCheck {
     private static let skippedKey = "UpdateSkippedVersion"
     /// Controllo automatico al massimo una volta a settimana.
     private static let interval: TimeInterval = 7 * 24 * 3600
-    private static let api = URL(string: "https://api.github.com/repos/peppolone/conclave/releases/latest")!
-    static let releasesPage = URL(string: "https://github.com/peppolone/conclave/releases")!
+    private static let api = URL(string: "https://api.github.com/repos/peppolone/Conclave/releases/latest")!
+    static let releasesPage = URL(string: "https://github.com/peppolone/Conclave/releases")!
 
     struct Release: Equatable {
         let version: String

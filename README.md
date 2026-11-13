@@ -10,12 +10,12 @@ providers you configure. No account, no server, no telemetry.
 ![macOS 26+](https://img.shields.io/badge/macOS-26%2B-black)
 ![Apple Silicon and Intel](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universal-black)
 ![Status: beta](https://img.shields.io/badge/status-beta%201-orange)
-[![Release](https://github.com/peppolone/conclave/actions/workflows/release.yml/badge.svg)](https://github.com/peppolone/conclave/actions/workflows/release.yml)
+[![Release](https://github.com/peppolone/Conclave/actions/workflows/release.yml/badge.svg)](https://github.com/peppolone/Conclave/actions/workflows/release.yml)
 
 > [!WARNING]
 > **Beta 1 — work in progress.** Conclave is under active development: expect rough edges, missing
 > features and changes between versions. Bug reports and feedback are welcome in
-> [Issues](https://github.com/peppolone/conclave/issues).
+> [Issues](https://github.com/peppolone/Conclave/issues).
 
 ![Composer](docs/screenshots/composer.png)
 ![A finished debate with the verdict](docs/screenshots/debate.png)
@@ -46,7 +46,7 @@ Node.js is bundled with the app; you do not need to install it.
 ## Installation
 
 1. Download `Conclave-<version>.dmg` and `SHA256SUMS.txt` from
-   [Releases](https://github.com/peppolone/conclave/releases).
+   [Releases](https://github.com/peppolone/Conclave/releases).
 2. Optionally verify the download:
 
    ```bash
@@ -140,7 +140,7 @@ Requirements: macOS 26, Xcode (the build uses `swiftc` and `actool` to compile t
 catalog), Node.js 24.
 
 ```bash
-git clone https://github.com/peppolone/conclave.git
+git clone https://github.com/peppolone/Conclave.git
 cd conclave
 npm ci
 npm run typecheck     # TypeScript type check, must report 0 errors
