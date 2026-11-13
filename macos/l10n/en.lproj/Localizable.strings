@@ -17,14 +17,10 @@
 "%d voci nel consiglio" = "%d voices in the council";
 "%dM token" = "%dM tokens";
 "%dk token" = "%dk tokens";
-"0 – solo risposte, veloce" = "0 – answers only, fast";
 "1 famiglia" = "1 family";
 "1 riserva" = "1 fallback";
 "1 risposta" = "1 answer";
 "1 voce nel consiglio" = "1 voice in the council";
-"1 – solo critica" = "1 – critique only";
-"2 – fino alla revisione" = "2 – up to revision";
-"3 – completo" = "3 – full";
 "A pagamento" = "Paid";
 "Conclave non riesce a funzionare" = "Conclave can’t run";
 "Conclave si apre da solo quando accedi al Mac." = "Conclave opens automatically when you log in to your Mac.";
@@ -318,7 +314,6 @@
 "Round 1 · Critica incrociata" = "Round 1 · Cross-Critique";
 "Round 2 · Revisione" = "Round 2 · Revision";
 "Round 3 · Posizione finale" = "Round 3 · Final Position";
-"Round di critica tra i modelli" = "Critique rounds between the models";
 "Saltato" = "Skipped";
 "Salva e attiva" = "Save and Activate";
 "Salvataggio…" = "Saving…";
@@ -334,7 +329,6 @@
 "Sistema" = "System";
 "Sistema: segue l'aspetto scelto in macOS." = "System: follows the appearance set in macOS.";
 "Solo a pagamento: l'abbonamento ChatGPT non include le API." = "Paid only: a ChatGPT subscription doesn’t include the API.";
-"Solo risposte" = "Answers only";
 "Solo risposte iniziali" = "Initial answers only";
 "Sovraccarico" = "Overloaded";
 "Sovraccarico ora, riprova più tardi" = "Overloaded right now, try again later";
@@ -497,3 +491,28 @@
 "Tutto il consiglio" = "Whole council";
 "Il consiglio ridiscute la domanda con gli stessi partecipanti e round, poi il giudice emette un nuovo verdetto." = "The council debates the question with the same participants and rounds, then the judge gives a new verdict.";
 "Un solo modello risponde subito, tenendo conto del dibattito." = "A single model answers right away, taking the debate into account.";
+
+/* Verdetto in cima, confidenza, fasi compresse, preset di velocità */
+"Approfondita — 3 round" = "Thorough — 3 rounds";
+"Standard — 2 round" = "Standard — 2 rounds";
+"1 round — solo critica" = "1 round — critique only";
+"Rapida — solo risposte e verdetto" = "Quick — answers and verdict only";
+"Rapida" = "Quick";
+"Standard" = "Standard";
+"Approfondita" = "Thorough";
+"meno di 1 min" = "under 1 min";
+"circa %d min" = "about %d min";
+"Affidabilità alta" = "High reliability";
+"Affidabilità media" = "Medium reliability";
+"Affidabilità bassa" = "Low reliability";
+"nessun cambiamento" = "no changes";
+"cambiamenti minori" = "minor changes";
+"cambiamenti sostanziali" = "substantial changes";
+"fiducia alta" = "high confidence";
+"fiducia media" = "medium confidence";
+"fiducia bassa" = "low confidence";
+"svolta da %@" = "done by %@";
+"1 modello" = "1 model";
+"Velocità: quanti round di critica tra i modelli prima del verdetto" = "Speed: how many critique rounds between the models before the verdict";
+"Quanto il giudice ritiene affidabile la risposta: accordo tra i modelli, solidità degli argomenti e punti da verificare." = "How reliable the judge considers the answer: agreement between the models, strength of the arguments and points to verify.";
+"Round %d — %@" = "Round %d — %@";

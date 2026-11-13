@@ -570,11 +570,13 @@ private struct MarkdownTableView: View {
     @State private var available: CGFloat = 0
 
     /// Colonne ridotte in proporzione per stare nella larghezza disponibile (il testo va a capo);
-    /// solo se non bastano 90 pt per colonna la tabella scorre in orizzontale.
+    /// solo se non bastano 90 pt per colonna (70 con più di 5 colonne) la tabella scorre in orizzontale.
     private func fitted(_ widths: [CGFloat]) -> [CGFloat] {
         let total = widths.reduce(0, +)
         guard available > 0, total > available else { return widths }
-        let minimum: CGFloat = 90
+        // Con molte colonne (es. "Dove divergono" con 6–10 risposte) le celle si stringono di più
+        // e il testo va a capo, prima di ricorrere allo scorrimento orizzontale.
+        let minimum: CGFloat = (widths.count > 5 ? 70 : 90) * zoom
         let free = available - minimum * CGFloat(widths.count)
         guard free > 0 else { return widths.map { max($0 * available / total, minimum) } }
         let extra = widths.map { max($0 - minimum, 0) }

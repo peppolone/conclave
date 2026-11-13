@@ -14,6 +14,8 @@ struct DebateSummary: Decodable, Identifiable, Equatable {
     /// Ultima attività (una domanda di seguito la aggiorna); assente con motori vecchi.
     let updated_at: String?
     let parent_id: Int?
+    /// Affidabilità del verdetto ("alta", "media", "bassa"); assente con motori vecchi.
+    let confidence: String?
     var displayTitle: String { debateTitle(title, question: question) }
     /// Data che ordina e raggruppa la cronologia: ultima attività, altrimenti la creazione.
     var activity: String { updated_at ?? created_at }
@@ -341,6 +343,8 @@ struct DebateRow: View {
         default: break
         }
         if debate.parent_id != nil { parts.append(L("Approfondimento")) }
+        // Solo l'affidabilità bassa, l'unica che chiede attenzione: la cronologia resta pulita.
+        if debate.status == "done", debate.confidence == "bassa" { parts.append(L("Affidabilità bassa")) }
         return parts.joined(separator: " · ")
     }
 

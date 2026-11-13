@@ -13,6 +13,8 @@ struct VoiceInfo: Identifiable, Equatable {
     let model: String
     let available: Bool
     let health: HealthDTO?
+    /// Tempo tipico di risposta (mediana delle ultime risposte riuscite, ms); nil senza dati.
+    var avgMs: Double? = nil
     var isClaude: Bool { id == "claude" }
     /// Problema da segnalare con "!" sul pulsante (nil se tutto ok).
     var problem: String? {
@@ -72,6 +74,8 @@ struct DebateState: Equatable {
     var phases: [PhaseState] = []
     var verdict: String?
     var verdictBy: String?
+    /// Affidabilità del verdetto secondo il giudice: "alta", "media", "bassa" (nil se manca).
+    var confidence: String?
     var participants: [String: (label: String, letter: String)] = [:]
     var judging = false       // il giudice sta scrivendo il verdetto
     var attachments: [AttachmentMeta] = []
@@ -96,7 +100,7 @@ struct DebateState: Equatable {
         a.id == b.id && a.status == b.status && a.phases == b.phases && a.verdict == b.verdict
             && a.statusText == b.statusText && a.question == b.question && a.title == b.title && a.finishedAt == b.finishedAt
             && a.judging == b.judging && a.attachments == b.attachments && a.webSearch == b.webSearch
-            && a.verdictBy == b.verdictBy && a.turn == b.turn && a.mode == b.mode && a.answer == b.answer && a.turns == b.turns
+            && a.verdictBy == b.verdictBy && a.confidence == b.confidence && a.turn == b.turn && a.mode == b.mode && a.answer == b.answer && a.turns == b.turns
     }
 }
 
@@ -118,6 +122,8 @@ final class CouncilStore: ObservableObject {
     /// Ricerca sul web possibile (`GET /api/models` → `webSearch`) e chi la farebbe.
     @Published var webSearchAvailable = false
     @Published var webSearchVia: String?
+    /// Tempo tipico del verdetto (ms, `GET /api/models` → `judgeAvgMs`); nil senza dati.
+    @Published var judgeAvgMs: Double?
     /// true mentre si allineano le scelte ai modelli disponibili: un modello che all'avvio
     /// non risponde ancora sparisce dalla scelta mostrata, ma non da quella salvata.
     private var syncing = false
@@ -176,7 +182,16 @@ final class CouncilStore: ObservableObject {
         "revise": L("Round 2 · Revisione"),
         "final": L("Round 3 · Posizione finale"),
     ]
-    static let roundsTitles = [3: L("3 – completo"), 2: L("2 – fino alla revisione"), 1: L("1 – solo critica"), 0: L("0 – solo risposte, veloce")]
+    static let roundsTitles = [3: L("Approfondita — 3 round"), 2: L("Standard — 2 round"), 1: L("1 round — solo critica"), 0: L("Rapida — solo risposte e verdetto")]
+    /// Nome breve del preset per l'etichetta del menu Round.
+    static func roundsLabel(_ r: Int) -> String {
+        switch r {
+        case 0: return L("Rapida")
+        case 2: return L("Standard")
+        case 3: return L("Approfondita")
+        default: return r == 1 ? L("1 round") : String(format: L("%d round"), r)
+        }
+    }
 
     init(port: @escaping () -> Int) { self.port = port }
 
@@ -218,7 +233,8 @@ final class CouncilStore: ObservableObject {
                 health = try? JSONDecoder().decode(HealthDTO.self, from: hd)
             }
             return VoiceInfo(id: id, label: label, provider: m["provider"] as? String ?? "",
-                             model: m["model"] as? String ?? "", available: m["available"] as? Bool ?? false, health: health)
+                             model: m["model"] as? String ?? "", available: m["available"] as? Bool ?? false, health: health,
+                             avgMs: (m["avgMs"] as? NSNumber)?.doubleValue)
         }
         voices = all.filter(\.available)
         lockedCount = all.count - voices.count
@@ -227,6 +243,7 @@ final class CouncilStore: ObservableObject {
         let ws = j["webSearch"] as? [String: Any]
         webSearchAvailable = ws?["available"] as? Bool ?? false
         webSearchVia = ws?["via"] as? String
+        judgeAvgMs = (j["judgeAvgMs"] as? NSNumber)?.doubleValue
 
         // Le scelte salvate sono la fonte: ogni scelta dell'utente si salva subito, quindi a ogni
         // ricarica si ripartono da lì (una voce tornata disponibile torna scelta). Quelle che ora
@@ -394,6 +411,21 @@ final class CouncilStore: ObservableObject {
 
     /// Chiamate previste ai modelli (verdetto escluso): una per partecipante a ogni fase.
     var estimatedCalls: Int { orderedSelection.count * (1 + rounds) }
+
+    /// Durata indicativa in secondi dai tempi tipici del motore: ogni fase dura quanto il
+    /// partecipante più lento, poi il verdetto. nil senza dati (mai tempi inventati).
+    var estimatedSeconds: Double? {
+        let times = orderedSelection.compactMap { id in voices.first { $0.id == id }?.avgMs }
+        guard let slowest = times.max(), let judge = judgeAvgMs else { return nil }
+        return (slowest * Double(1 + rounds) + judge) / 1000
+    }
+
+    /// "circa 2 min", "meno di 1 min"; nil senza dati.
+    var estimatedTime: String? {
+        guard let s = estimatedSeconds else { return nil }
+        if s < 60 { return L("meno di 1 min") }
+        return String(format: L("circa %d min"), max(1, Int((s / 60).rounded())))
+    }
 
     /// true quando la stima ha senso (motore pronto, almeno due partecipanti).
     var canEstimate: Bool {
@@ -602,6 +634,7 @@ final class CouncilStore: ObservableObject {
             if phase == "verdict" {
                 d.verdict = text
                 d.verdictBy = judgeName(modelId.replacingOccurrences(of: "judge:", with: ""), in: d)
+                if let c = e["confidence"] as? String { d.confidence = c }
             } else if phase == "answer" {
                 setAnswer(&d, modelId: modelId) {
                     $0.text = text
@@ -638,6 +671,7 @@ final class CouncilStore: ObservableObject {
             d.status = status
             d.judging = false
             d.finishedAt = .now
+            if let c = e["confidence"] as? String { d.confidence = c }
             d.statusText = status == "done" ? Self.statusText("done") : (e["error"] as? String ?? Self.statusText(status))
         default:
             break
@@ -715,6 +749,7 @@ final class CouncilStore: ObservableObject {
                             statusText: Self.statusText(status), startedAt: Self.date(j["created_at"]),
                             finishedAt: Self.date(j["finished_at"]))
         d.title = j["title"] as? String
+        d.confidence = j["confidence"] as? String
         d.webSearch = opts?["webSearch"] as? Bool ?? false
         if let o = opts, let jid = o["judge"] as? String {
             d.judgeId = jid
@@ -850,6 +885,7 @@ final class CouncilStore: ObservableObject {
                     d.verdictBy = judgeName(mid.replacingOccurrences(of: "judge:", with: ""), in: d)
                     // Il verdetto del dibattito originale arriva da `debates.verdict`.
                     if d.turn > 0 { d.verdict = v }
+                    if let c = m["confidence"] as? String { d.confidence = c }
                 }
                 continue
             }
@@ -1069,7 +1105,11 @@ final class CouncilStore: ObservableObject {
             out += ["**" + L("Allegati") + ":** " + d.attachments.map { "\($0.name) (\(charsText($0.chars)))" }.joined(separator: ", "), ""]
         }
         out += ["_\(meta(d))_", ""]
-        if let v = d.verdict { out += ["## " + L("Verdetto"), "", v, ""] }
+        if let v = d.verdict {
+            out += ["## " + L("Verdetto"), ""]
+            if let c = Self.confidenceText(d.confidence) { out += ["_" + c + "_", ""] }
+            out += [v, ""]
+        }
         func card(_ c: CardState, _ h: String) {
             out += ["\(h) \(c.title)", ""]
             if let m = c.usedModel, c.replaced != nil { out += ["_" + String(format: L("Ha risposto %@ al posto di %@, che non ha risposto in tempo."), m, c.replaced ?? "") + "_", ""] }
@@ -1091,13 +1131,15 @@ final class CouncilStore: ObservableObject {
             if !t.attachments.isEmpty {
                 out += ["**" + L("Allegati") + ":** " + t.attachments.map { "\($0.name) (\(charsText($0.chars)))" }.joined(separator: ", "), ""]
             }
-            phases(t.phases, "###")
-            if let a = t.answer { card(a, "###") }
+            // Come nella vista: prima il verdetto del turno, poi lo svolgimento.
             if let v = t.verdict {
                 out += ["### " + L("Verdetto"), ""]
-                if let by = t.verdictBy { out += ["_" + String(format: L("Giudice: %@"), by) + "_", ""] }
+                let info = [t.verdictBy.map { String(format: L("Giudice: %@"), $0) }, Self.confidenceText(t.confidence)].compactMap { $0 }
+                if !info.isEmpty { out += ["_" + info.joined(separator: " · ") + "_", ""] }
                 out += [v, ""]
             }
+            phases(t.phases, "###")
+            if let a = t.answer { card(a, "###") }
             if t.answer == nil && t.verdict == nil && !t.isRunning { out += ["_\(t.statusText)_", ""] }
         }
         let slug = d.displayTitle.folding(options: .diacriticInsensitive, locale: .current).lowercased()
@@ -1219,6 +1261,70 @@ extension CouncilStore {
         total += 1
         if d.verdict != nil { done += 1 }
         return (min(done, total), max(total, 1))
+    }
+
+    /// "Affidabilità alta/media/bassa" (nil se il giudice non l'ha indicata).
+    static func confidenceText(_ c: String?) -> String? {
+        switch c {
+        case "alta": return L("Affidabilità alta")
+        case "media": return L("Affidabilità media")
+        case "bassa": return L("Affidabilità bassa")
+        default: return nil
+        }
+    }
+
+    /// Ultimo valore di una riga macchina ("CAMBIAMENTI: minori", "FIDUCIA: alta") nel testo,
+    /// anche con ** intorno o nella forma inglese; restituito in italiano.
+    static func machineValue(_ text: String, keys: String, map: [String: String]) -> String? {
+        let words = map.keys.joined(separator: "|")
+        guard let re = try? NSRegularExpression(pattern: "(?:\(keys))[ \\t]*\\**[ \\t]*:[ \\t]*\\**[ \\t]*(\(words))\\b",
+                                                options: [.caseInsensitive]) else { return nil }
+        let ns = text as NSString
+        guard let m = re.matches(in: text, range: NSRange(location: 0, length: ns.length)).last else { return nil }
+        return map[ns.substring(with: m.range(at: 1)).lowercased()]
+    }
+
+    private static let changeWords = ["nessuno": "nessuno", "minori": "minori", "sostanziali": "sostanziali",
+                                      "none": "nessuno", "minor": "minori", "substantial": "sostanziali"]
+    private static let trustWords = ["alta": "alta", "media": "media", "bassa": "bassa",
+                                     "high": "alta", "medium": "media", "low": "bassa"]
+    private static let changeNames = ["nessuno": L("nessun cambiamento"), "minori": L("cambiamenti minori"), "sostanziali": L("cambiamenti sostanziali")]
+    private static let trustNames = ["alta": L("fiducia alta"), "media": L("fiducia media"), "bassa": L("fiducia bassa")]
+
+    /// Riassunto di una fase compressa, in una riga: "4 modelli", "A cambiamenti sostanziali, B
+    /// nessun cambiamento", "A fiducia alta, B fiducia media". Dalle righe CAMBIAMENTI e FIDUCIA
+    /// che i modelli scrivono in fondo alla revisione e alla posizione finale.
+    func phaseSummary(_ p: PhaseState, in d: DebateState) -> String? {
+        if p.cards.isEmpty { return p.note }
+        let answered = p.cards.filter { $0.text != nil }
+        let missing = p.cards.count - answered.count
+        func letter(_ c: CardState) -> String { d.participants[c.id]?.letter ?? c.title }
+        var main: String?
+        switch p.id {
+        case "research":
+            main = answered.first.flatMap { c in c.title.components(separatedBy: " · ").dropFirst().first }
+                .map { String(format: L("svolta da %@"), $0) }
+        case "revise", "final":
+            let isRevise = p.id == "revise"
+            let items: [String] = answered.compactMap { c in
+                guard let t = c.text else { return nil }
+                let v = isRevise ? Self.machineValue(t, keys: "CAMBIAMENTI|CHANGES", map: Self.changeWords)
+                                 : Self.machineValue(t, keys: "FIDUCIA|CONFIDENCE", map: Self.trustWords)
+                guard let v, let name = (isRevise ? Self.changeNames : Self.trustNames)[v] else { return nil }
+                return "\(letter(c)) \(name)"
+            }
+            if !items.isEmpty { main = items.joined(separator: ", ") }
+        default:
+            break
+        }
+        if main == nil {
+            let n = answered.count
+            main = p.id == "initial" ? (n == 1 ? L("1 modello") : String(format: L("%d modelli"), n))
+                : (n == 1 ? L("1 risposta") : String(format: L("%d risposte"), n))
+        }
+        var parts = [main!]
+        if missing > 0 { parts.append(String(format: L("%d senza risposta"), missing)) }
+        return parts.joined(separator: " · ")
     }
 
     /// Partecipanti ancora in gioco (esclusi quelli che hanno fallito la risposta iniziale).

@@ -370,10 +370,9 @@ struct ComposerView: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             } label: {
-                Label(store.rounds == 0 ? L("Solo risposte") : (store.rounds == 1 ? L("1 round") : String(format: L("%d round"), store.rounds)),
-                      systemImage: "arrow.triangle.2.circlepath")
+                Label(CouncilStore.roundsLabel(store.rounds), systemImage: "arrow.triangle.2.circlepath")
             }
-            .help(L("Round di critica tra i modelli"))
+            .help(L("Velocità: quanti round di critica tra i modelli prima del verdetto"))
             .accessibilityLabel(L("Round"))
 
             Menu {
@@ -411,7 +410,8 @@ struct ComposerView: View {
             Spacer(minLength: 8)
 
             if store.canEstimate {
-                Label(String(format: L("%d chiamate + 1 verdetto"), store.estimatedCalls),
+                Label(String(format: L("%d chiamate + 1 verdetto"), store.estimatedCalls)
+                        + (store.estimatedTime.map { " · " + $0 } ?? ""),
                       systemImage: "arrow.left.arrow.right")
                     .monospacedDigit()
                     .lineLimit(1)
@@ -635,7 +635,7 @@ struct DebateView: View {
 
                     // Il verdetto è il risultato: viene subito dopo l'intestazione, prima dello svolgimento.
                     if let v = debate.verdict {
-                        verdictBox(v, by: debate.verdictBy).id("phase-verdict")
+                        verdictBox(v, by: debate.verdictBy, confidence: debate.confidence).id("phase-verdict")
                             .padding(.top, 24)
                             .transition(.opacity)
                     } else if debate.isRunning && debate.judging {
@@ -694,6 +694,8 @@ struct DebateView: View {
             }
             .onChange(of: sectionKey) {
                 guard watchedLive, following else { return }
+                // Si va al verdetto in cima, non in fondo: niente resnap al termine del dibattito.
+                if debate.verdict != nil || debate.judging { pinnedBottom = false }
                 Task { @MainActor in
                     // Si attende il layout della nuova sezione prima di scorrere.
                     try? await Task.sleep(for: .milliseconds(80))
@@ -751,8 +753,32 @@ struct DebateView: View {
                   proxy.scrollTo(Self.endID, anchor: .bottom)
               }
           }
-          .onChange(of: runningTurn) { _, n in
+          .onChange(of: runningTurn) { old, n in
               if let n { liveTurns.insert(n) }
+              // Turno del consiglio concluso mentre lo si seguiva (agganciati in fondo): si sale al suo
+              // verdetto, poi le fasi sotto si comprimono. Comprimere dopo lo scorrimento tocca solo
+              // righe sotto il verdetto, quindi ciò che si sta leggendo non si sposta.
+              guard n == nil, let o = old, pinnedBottom,
+                    let t = debate.turns.first(where: { $0.turn == o }), !t.isQuick, t.verdict != nil else { return }
+              pinnedBottom = false
+              if reduceMotion { proxy.scrollTo("turn-\(o)-verdict", anchor: .top) }
+              else { withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo("turn-\(o)-verdict", anchor: .top) } }
+              Task { @MainActor in
+                  try? await Task.sleep(for: .milliseconds(500))
+                  liveTurns.remove(o)
+              }
+          }
+          // Dibattito concluso mentre lo si seguiva: la vista è già sul verdetto (in cima allo
+          // svolgimento); a scorrimento finito le fasi sotto si comprimono, come in un dibattito
+          // aperto dalla cronologia. Chi stava rileggendo un round (sganciato) lo ritrova aperto.
+          .onChange(of: debate.isRunning) { was, now in
+              guard was, !now, watchedLive, following, debate.verdict != nil else { return }
+              pinnedBottom = false
+              Task { @MainActor in
+                  try? await Task.sleep(for: .milliseconds(500))
+                  guard following else { return }
+                  watchedLive = false
+              }
           }
         }
     }
@@ -977,7 +1003,7 @@ struct DebateView: View {
 
     // MARK: Verdetto: scheda protagonista
 
-    private func verdictBox(_ text: String, by verdictBy: String?, key: String = "verdict") -> some View {
+    private func verdictBox(_ text: String, by verdictBy: String?, confidence: String?, key: String = "verdict") -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: "checkmark.seal.fill")
@@ -997,6 +1023,16 @@ struct DebateView: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
+
+                if let c = CouncilStore.confidenceText(confidence) {
+                    // Affidabilità secondo il giudice: testo e simbolo, il colore è solo una seconda codifica.
+                    StatusBadge(text: c,
+                                symbol: confidence == "alta" ? "checkmark.shield.fill"
+                                    : confidence == "media" ? "exclamationmark.shield.fill" : "xmark.shield.fill",
+                                tint: confidence == "alta" ? Brand.success : confidence == "media" ? Brand.warning : Brand.danger)
+                        .fixedSize()
+                        .help(L("Quanto il giudice ritiene affidabile la risposta: accordo tra i modelli, solidità degli argomenti e punti da verificare."))
+                }
 
                 Spacer(minLength: 8)
                 actions(text, key: key)
@@ -1100,12 +1136,16 @@ struct DebateView: View {
             StepMarker(number: number, state: state, reduceMotion: reduceMotion)
         } content: {
             Button(action: toggle) {
+                // Fase chiusa e non in corso: una sola riga con il riassunto (es. "Round 2 — Revisione:
+                // A cambiamenti sostanziali, B nessun cambiamento").
                 PhaseHeader(eyebrow: store.phaseEyebrow(p.id, in: d),
                             name: CouncilStore.phaseNames[p.id] ?? p.title,
                             description: CouncilStore.phaseDescriptions[p.id],
                             note: p.note, state: state, meta: phaseMeta(p, state),
                             expanded: open, canExpand: !p.cards.isEmpty,
-                            reduceMotion: reduceMotion)
+                            reduceMotion: reduceMotion,
+                            compact: open || state == .current ? nil
+                                : (title: compactTitle(p), summary: store.phaseSummary(p, in: d)))
             }
             .buttonStyle(PhaseHeaderStyle())
             .disabled(p.cards.isEmpty)
@@ -1125,6 +1165,13 @@ struct DebateView: View {
             .id("\(prefix)\(p.id)-\(cols)-\(i)")
             .transition(.opacity)
         }
+    }
+
+    /// Nome della fase nella riga compressa: "Risposte iniziali", "Round 2 — Revisione".
+    private func compactTitle(_ p: PhaseState) -> String {
+        let name = CouncilStore.phaseNames[p.id] ?? p.title
+        guard let i = CouncilStore.phaseOrder.firstIndex(of: p.id), i > 0 else { return name }
+        return String(format: L("Round %d — %@"), i, name)
     }
 
     /// "3 di 5 risposte" durante la fase; "5 risposte · fino a 41 s" a fase chiusa.
@@ -1154,11 +1201,10 @@ extension DebateView {
             .padding(.top, 40)
             .padding(.bottom, 16)
 
-        ForEach(Array(t.phases.enumerated()), id: \.element.id) { i, p in
-            phaseRows(p, number: i + 1, last: i == t.phases.count - 1, in: t)
-        }
-
         if t.isQuick {
+            ForEach(Array(t.phases.enumerated()), id: \.element.id) { i, p in
+                phaseRows(p, number: i + 1, last: i == t.phases.count - 1, in: t)
+            }
             if let a = t.answer {
                 CardView(card: a, running: t.isRunning, since: t.startedAt)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1169,16 +1215,24 @@ extension DebateView {
             } else {
                 turnStatus(t).id("turn-\(n)-status")
             }
-        } else if let v = t.verdict {
-            verdictBox(v, by: t.verdictBy, key: "turn-\(n)")
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(String(format: L("Verdetto della domanda di seguito %d"), n))
-                .id("turn-\(n)-verdict")
-                .padding(.top, 24)
-        } else if t.isRunning && t.judging {
-            judgingPlaceholder.id("turn-\(n)-verdict").padding(.top, 24)
-        } else if !t.isRunning || t.phases.isEmpty {
-            turnStatus(t).id("turn-\(n)-status").padding(.top, t.phases.isEmpty ? 0 : 20)
+        } else {
+            // Turno del consiglio: come il dibattito originale, il verdetto (o il segnaposto mentre il
+            // giudice scrive) viene subito dopo la domanda, lo svolgimento sotto.
+            let gap: CGFloat = t.phases.isEmpty ? 0 : 28
+            if let v = t.verdict {
+                verdictBox(v, by: t.verdictBy, confidence: t.confidence, key: "turn-\(n)")
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(String(format: L("Verdetto della domanda di seguito %d"), n))
+                    .id("turn-\(n)-verdict")
+                    .padding(.bottom, gap)
+            } else if t.isRunning && t.judging {
+                judgingPlaceholder.id("turn-\(n)-verdict").padding(.bottom, gap)
+            } else if !t.isRunning || t.phases.isEmpty {
+                turnStatus(t).id("turn-\(n)-status").padding(.bottom, gap)
+            }
+            ForEach(Array(t.phases.enumerated()), id: \.element.id) { i, p in
+                phaseRows(p, number: i + 1, last: i == t.phases.count - 1, in: t)
+            }
         }
     }
 
@@ -1494,8 +1548,46 @@ private struct PhaseHeader: View {
     let expanded: Bool
     let canExpand: Bool
     let reduceMotion: Bool
+    /// Fase compressa: titolo e riassunto in una riga al posto dell'intestazione completa.
+    var compact: (title: String, summary: String?)? = nil
 
     var body: some View {
+        if let compact { compactBody(compact) } else { fullBody }
+    }
+
+    private func compactBody(_ c: (title: String, summary: String?)) -> some View {
+        var line = AttributedString(c.title)
+        line.font = .headline
+        if let s = c.summary, !s.isEmpty {
+            var rest = AttributedString(": " + s)
+            rest.font = .callout
+            rest.foregroundColor = .secondary
+            line += rest
+        }
+        return HStack(alignment: .center, spacing: 12) {
+            Text(line)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+            // Il segno di completato è implicito; gli altri stati restano scritti.
+            if state != .done {
+                PhaseStatusLabel(state: state, reduceMotion: reduceMotion).fixedSize()
+            }
+            if canExpand {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 16, height: 22)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(minHeight: 28)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityLabel([c.title, state == .done ? nil : PhaseStatusLabel.text(state), c.summary].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    private var fullBody: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(eyebrow)
