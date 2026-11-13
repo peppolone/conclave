@@ -30,7 +30,8 @@ function isGroq(m: ModelDef): boolean {
 
 /** Chi può fare la ricerca adesso, o null se nessuno. */
 export function findResearcher(): Researcher | null {
-  const claude = config.models.find((m) => m.kind === "claude-cli" && isAvailable(m));
+  // Claude "down" (es. limite del piano raggiunto): si passa subito a Groq invece di attendere l'errore.
+  const claude = config.models.find((m) => m.kind === "claude-cli" && isAvailable(m) && getHealth(m.id).status !== "down");
   if (claude) return { def: claude, via: "Claude" };
   const groq = config.models.find((m) =>
     m.kind === "openai" && isGroq(m) && (m.family ?? familyOf(m.model).id) === "gpt-oss" &&

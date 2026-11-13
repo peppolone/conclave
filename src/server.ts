@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection, type ModelDef } from "./config.ts";
-import { medianMsByModel, JUDGE_KEY, createDebate, listDebates, getDebate, deleteDebate, saveAttachments, saveMessage, nextTurn, hasTurnZeroContent, startTurn } from "./db.ts";
+import { medianMsByModel, JUDGE_KEY, createDebate, listDebates, getDebate, deleteDebate, saveAttachments, saveMessage, nextTurn, hasTurnZeroContent, startTurn, finishTurn, finishDebate } from "./db.ts";
 import { runDebate, runQuickAnswer, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
 import { buildConversation } from "./debate/followup.ts";
 import type { Attachment } from "./debate/prompts.ts";
@@ -87,7 +87,14 @@ function send(r: Running, e: DebateEvent) {
 function track(id: number, turn: number, work: (r: Running) => Promise<void>): void {
   const r: Running = { turn, events: [], clients: new Set(), controller: new AbortController(), finished: false };
   running.set(id, r);
-  work(r).catch(logError(turn ? `discussione ${id}, turno ${turn}` : `dibattito ${id}`)).finally(() => {
+  // Anche un'eccezione sincrona di `work` diventa un rifiuto: il turno non resta "in corso".
+  Promise.resolve().then(() => work(r)).catch((e) => {
+    logError(turn ? `discussione ${id}, turno ${turn}` : `dibattito ${id}`)(e);
+    // Lavoro finito senza "done": stato e flussi si chiudono qui, o ogni turno nuovo darebbe 409.
+    if (r.events.some((x) => x.type === "done")) return;
+    try { if (turn) finishTurn(id, "failed"); else finishDebate(id, "failed", null); } catch (err) { logError(`chiusura ${id}`)(err); }
+    send(r, { type: "done", status: "failed", error: redact((e as Error)?.message ?? String(e)), ...(turn ? { turn } : {}) } as DebateEvent);
+  }).finally(() => {
     r.finished = true;
     for (const c of r.clients) c.end();
     // Tiene gli eventi in memoria ancora un po' per chi si ricollega; un turno nuovo nel frattempo
@@ -333,7 +340,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       if (!r) return json(res, 404, { error: "dibattito non in corso" });
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       for (const e of r.events) res.write(`data: ${JSON.stringify(e)}\n\n`);
-      if (r.events.some((e) => e.type === "done")) return res.end();
+      if (r.finished || r.events.some((e) => e.type === "done")) return res.end();
       r.clients.add(res);
       // Commento SSE periodico: durante un giudice lento il flusso non resta muto per minuti.
       const ping = setInterval(() => { if (!res.writableEnded) res.write(": ping\n\n"); }, SSE_PING_MS);
