@@ -32,6 +32,16 @@ db.exec(`
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS messages_debate ON messages(debate_id);
+  -- Testo completo degli allegati: serve solo al motore (prompt), non torna all'app.
+  -- Tabella a parte (non una colonna di debates) così SELECT * di getDebate non lo espone.
+  CREATE TABLE IF NOT EXISTS attachments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    debate_id   INTEGER NOT NULL REFERENCES debates(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    text        TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS attachments_debate ON attachments(debate_id);
 `);
 // Migrazione per DB esistenti: aggiunge le colonne mancanti.
 {
@@ -59,6 +69,8 @@ export interface StoredOptions {
   rounds: number;
   judge: string;
   claudeModel: string;
+  /** Presente (true) solo se è stata chiesta la ricerca sul web. */
+  webSearch?: boolean;
 }
 
 export function createDebate(question: string, models: string[], options: StoredOptions, parentId: number | null = null): number {
@@ -72,6 +84,11 @@ export function saveMessage(debateId: number, m: MessageRow): void {
   db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms, model_used, replaced)
               SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM debates WHERE id = ?)`)
     .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null, debateId);
+}
+
+export function saveAttachments(debateId: number, list: { name: string; kind: string; text: string }[]): void {
+  const ins = db.prepare(`INSERT INTO attachments (debate_id, name, kind, text) VALUES (?, ?, ?, ?)`);
+  for (const a of list) ins.run(debateId, a.name, a.kind, a.text);
 }
 
 export function finishDebate(id: number, status: string, verdict: string | null, title: string | null = null): void {
@@ -104,5 +121,6 @@ export function getDebate(id: number) {
 
 export function deleteDebate(id: number): void {
   db.prepare(`DELETE FROM messages WHERE debate_id = ?`).run(id);
+  db.prepare(`DELETE FROM attachments WHERE debate_id = ?`).run(id);
   db.prepare(`DELETE FROM debates WHERE id = ?`).run(id);
 }

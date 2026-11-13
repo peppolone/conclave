@@ -27,6 +27,30 @@ export function normalizeText(s: string): string {
     .replace(/​/g, "");
 }
 
+/** Rimandi interni di GPT-OSS ai risultati dello strumento (es. "【2†L6-L10】"): per chi legge non significano nulla. */
+export function stripCitations(s: string): string {
+  return s.replace(/[ \t]*【[^】\n]{0,40}】/g, "").trim();
+}
+
+/**
+ * Aggiunge in fondo gli indirizzi delle pagine consultate dallo strumento di ricerca
+ * (`executed_tools` di Groq) che il testo non cita già: il dossier deve avere fonti verificabili.
+ * La forma della risposta non è documentata in dettaglio: si cercano campi `url` ovunque.
+ */
+export function withSources(text: string, tools: unknown): string {
+  const urls = new Set<string>();
+  const walk = (v: unknown, depth: number) => {
+    if (depth > 6 || urls.size >= 20 || v === null || typeof v !== "object") return;
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (k === "url" && typeof x === "string" && /^https?:\/\/\S+$/.test(x) && x.length < 500) urls.add(x);
+      else walk(x, depth + 1);
+    }
+  };
+  walk(tools, 0);
+  const missing = [...urls].filter((u) => !text.includes(u)).slice(0, 10);
+  return missing.length ? `${text}\n\n**Pagine consultate**\n${missing.map((u) => `- ${u}`).join("\n")}` : text;
+}
+
 /** "Please try again in 22.5s" / "1m2.5s" / "750ms" → secondi (0 se assente). */
 export function parseTryAgain(msg: string): number {
   const m = msg.match(/try again in\s+((?:\d+h)?(?:\d+m(?!s))?(?:[\d.]+s)?|[\d.]+ms)/i);
@@ -94,6 +118,8 @@ export async function once(p: Provider, model: string, req: ChatRequest, timeout
       temperature: 0.6,
       // Parametri specifici del provider (es. Gemini: ragionamento leggero), da models.json.
       ...(p.extraBody ?? {}),
+      // Ricerca sul web di Groq (solo GPT-OSS): strumento eseguito dal provider, ragionamento leggero.
+      ...(req.webSearch ? { tools: [{ type: "browser_search" }], reasoning_effort: "low" } : {}),
     }),
     signal: AbortSignal.any(signals),
   });
@@ -118,6 +144,7 @@ export async function once(p: Provider, model: string, req: ChatRequest, timeout
   let text: string = typeof msg?.content === "string" ? msg.content : "";
   // Alcuni modelli di ragionamento includono il "pensiero" tra tag <think>.
   text = normalizeText(text.replace(/<think>[\s\S]*?<\/think>/g, "")).trim();
+  if (req.webSearch) text = withSources(stripCitations(text), msg?.executed_tools);
   if (!text) throw new Error("risposta vuota dal modello");
   // Risposta tagliata dal limite di lunghezza: lo si dichiara, così giudice e utente lo sanno.
   if (j.choices?.[0]?.finish_reason === "length") text += "\n\n[…risposta troncata dal limite di lunghezza]";
@@ -138,7 +165,7 @@ export async function chatOpenAI(p: Provider, models: string[], req: ChatRequest
     for (let attempt = 0; ; attempt++) {
       try {
         // Se c'è una riserva, un modello lento non deve consumare tutto il tempo del round.
-        const text = await once(p, model, req, hasNext ? ATTEMPT_WITH_RESERVE_MS : TIMEOUT_MS);
+        const text = await once(p, model, req, req.timeoutMs ?? (hasNext ? ATTEMPT_WITH_RESERVE_MS : TIMEOUT_MS));
         return { text, ms: Date.now() - started, model };
       } catch (e) {
         lastError = e;

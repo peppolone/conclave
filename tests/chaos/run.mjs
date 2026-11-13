@@ -13,7 +13,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MODELS, FAKE_GOOGLE_KEY } from "./mock-provider.mjs";
+import { MODELS, FAKE_GOOGLE_KEY, DOSSIER_MARK, DOSSIER_URL } from "./mock-provider.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
@@ -152,9 +152,9 @@ async function finalState(id, waitMs = 5000) {
 
 const QUESTION = (tag) => `[scenario:${tag}] Conviene usare il treno o l'aereo per Roma–Milano?`;
 
-async function debate(tag, models, rounds, judge, timeoutMs, { onStart } = {}) {
+async function debate(tag, models, rounds, judge, timeoutMs, { onStart, extra } = {}) {
   const started = Date.now();
-  const r = await api("POST", "/api/debates", { body: { question: QUESTION(tag), models, rounds, judge, claudeModel: "sonnet" } });
+  const r = await api("POST", "/api/debates", { body: { question: QUESTION(tag), models, rounds, judge, claudeModel: "sonnet", ...extra } });
   if (r.status !== 201) throw new Error(`POST /api/debates → ${r.status} ${r.text.slice(0, 150)}`);
   const id = r.body.id;
   onStart?.(id);
@@ -333,7 +333,7 @@ const SCENARIOS = {
       ["rounds stringa", { body: { ...base, rounds: "2" } }, 400],
       ["modello duplicato (resta 1 solo)", { body: { ...base, models: ["ok-a", "ok-a"] } }, 400],
       ["11 partecipanti (max 10)", { body: { ...base, models: ["ok-a", "ok-b", "hang", "slow", "ratelimit", "quota", "crash500", "empty", "huge", "html", "flaky-critique"] } }, 400],
-      ["corpo > 100 kB", { body: { ...base, question: "x".repeat(150_000) } }, 413],
+      ["domanda di 150.000 caratteri", { body: { ...base, question: "x".repeat(150_000) } }, 400],
       ["senza token", { body: base, headers: { Authorization: "" } }, 401],
       ["token sbagliato", { body: base, headers: { Authorization: `Bearer ${"0".repeat(64)}` } }, 401],
       ["token come cookie/query", { body: base, headers: { Authorization: "", Cookie: `token=${TOKEN}` } }, 401],
@@ -342,7 +342,7 @@ const SCENARIOS = {
     for (const [name, opts, want] of cases) {
       const r = await api("POST", "/api/debates", opts).catch((e) => ({ status: `errore ${e.message}` }));
       // Per gli ultimi casi (non richiesti) basta un 4xx: nessun dibattito avviato, nessun 500.
-      const lenient = ["JSON rovinato", "models non array", "rounds stringa", "corpo > 100 kB"].includes(name);
+      const lenient = ["JSON rovinato", "models non array", "rounds stringa", "domanda di 150.000 caratteri"].includes(name);
       const ok = lenient ? typeof r.status === "number" && r.status >= 400 && r.status < 500 : r.status === want;
       if (!ok) wrong.push(`${name}: atteso ${lenient ? "4xx" : want}, avuto ${r.status}`);
     }
@@ -778,6 +778,260 @@ SCENARIOS.z = async function z() {
   return [true, `silenzio massimo ${res.maxGap.toFixed(1)} s, ${res.comments} heartbeat`, secs()];
 };
 
+// ---------- ricerca sul web e allegati ----------
+
+const RESEARCH_TIMEOUT_S = 6;
+const promptsOf = async (tag) => (await api("GET", `/prompts/${tag}`, { port: mockPort })).body ?? [];
+const phaseEvent = (events, phase) => events.findIndex((e) => e.type === "phase" && e.phase === phase);
+
+// Ricerca via Groq finto: fase research prima di initial, dossier ripulito dai rimandi 【…】 e con le
+// pagine consultate, nel prompt iniziale e del giudice ma non nei round intermedi.
+SCENARIOS.aa = async function aa() {
+  const max = 90;
+  const ws = (await api("GET", "/api/models")).body?.webSearch;
+  if (!ws?.available || ws.via !== "GPT-OSS (Groq)") return [false, `/api/models webSearch = ${JSON.stringify(ws)}`, 0];
+  const r = await debate("web-ok", ["ok-a", "ok-b"], 1, "ok-a", max * 1000, { extra: { webSearch: true } });
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const iR = phaseEvent(r.events, "research"), iI = phaseEvent(r.events, "initial");
+  if (iR < 0 || iI < 0 || iR > iI) return [false, `ordine delle fasi sbagliato (research ${iR}, initial ${iI})`, r.secs];
+  const ev = r.events.find((e) => e.type === "message" && e.phase === "research");
+  if (ev?.modelId !== "research:gptoss" || !/gpt-oss/.test(ev.model ?? "")) return [false, `evento research: ${JSON.stringify(ev)?.slice(0, 100)}`, r.secs];
+  const row = okMsgs(r.state, "research:gptoss", "research")[0];
+  if (!row) return [false, "dossier non salvato nella cronologia", r.secs];
+  if (row.content.includes("【")) return [false, "rimandi 【…】 non ripuliti", r.secs];
+  if (!row.content.includes(DOSSIER_URL) || !row.content.includes("https://example.org/altra")) return [false, "fonti mancanti nel dossier", r.secs];
+  if (r.state.options?.webSearch !== true) return [false, `options.webSearch = ${r.state.options?.webSearch}`, r.secs];
+  const pr = await promptsOf("web-ok");
+  const search = pr.filter((p) => p.phase === "research");
+  if (search.length !== 1) return [false, `${search.length} richieste di ricerca (attesa 1)`, r.secs];
+  if (search[0].reasoning_effort !== "low" || !/gpt-oss-(120b|20b)$/.test(search[0].model)) return [false, `ricerca con ${search[0].model}, reasoning ${search[0].reasoning_effort}`, r.secs];
+  const wrong = [];
+  for (const p of pr.filter((x) => x.phase !== "research")) {
+    const has = p.user.includes("RISULTATI DELLA RICERCA SUL WEB") && p.user.includes(DOSSIER_MARK);
+    const want = p.phase === "initial" || p.phase === "verdict";
+    if (has !== want) wrong.push(`${p.phase}/${p.model}: dossier ${has ? "presente" : "assente"}`);
+  }
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), r.secs];
+  return [true, `research prima di initial, dossier ripulito con fonti, nei prompt iniziali e del giudice (${pr.length} prompt)`, r.secs];
+};
+
+// Nessuno può cercare (niente Claude, niente GPT-OSS su Groq): nota e il dibattito prosegue.
+SCENARIOS.ab = async function ab() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const tok = randomBytes(32).toString("hex");
+  const prov = { baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" };
+  const cfg = {
+    providers: { chaos: { name: "Chaos", ...prov } },
+    judge: { id: "j", label: "Giudice", kind: "openai", provider: "chaos", model: "ok-a" },
+    models: [
+      { id: "ok-a", label: "A", kind: "openai", provider: "chaos", model: "ok-a", family: "ok-a", default: false },
+      { id: "ok-b", label: "B", kind: "openai", provider: "chaos", model: "ok-b", family: "ok-b", default: false },
+      // GPT-OSS ma non su Groq: non conta come ricercatore.
+      { id: "gptoss", label: "GPT-OSS altrove", kind: "openai", provider: "chaos", model: "openai/gpt-oss-120b", family: "gpt-oss", default: false },
+    ],
+  };
+  const e = await startExtraEngine(cfg, JSON.stringify({ token: tok, keys: { CHAOS_KEY } }));
+  const ws = (await api("GET", "/api/models", { port: e.port, headers: authed(tok) })).body?.webSearch;
+  if (!ws || ws.available !== false || ws.via !== null) return [false, `/api/models webSearch = ${JSON.stringify(ws)}`, secs()];
+  const c = await api("POST", "/api/debates", { port: e.port, headers: authed(tok),
+    body: { question: QUESTION("web-none"), models: ["ok-a", "ok-b"], rounds: 0, judge: "ok-a", claudeModel: "sonnet", webSearch: true } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  let state;
+  for (let i = 0; i < 100; i++) {
+    state = (await api("GET", `/api/debates/${c.body.id}`, { port: e.port, headers: authed(tok) })).body;
+    if (state?.status && state.status !== "running") break;
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  e.proc.kill("SIGTERM");
+  if (state?.status !== "done") return [false, `stato "${state?.status}"`, secs()];
+  const note = state.messages.find((m) => m.model_id === "_note" && m.phase === "research");
+  if (!note) return [false, "nessuna nota sulla ricerca non disponibile", secs()];
+  if (state.messages.some((m) => m.phase === "research" && m.model_id !== "_note")) return [false, "messaggi di ricerca senza ricercatore", secs()];
+  return [true, `done, nota: "${note.content.slice(0, 50)}…"`, secs()];
+};
+
+// Ricercatore bloccato: errore non fatale entro il tempo massimo, poi il dibattito prosegue senza dossier.
+SCENARIOS.ac = async function ac() {
+  const max = 90;
+  const r = await debate("web-hang", ["ok-a", "ok-b"], 0, "ok-a", max * 1000, { extra: { webSearch: true } });
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const err = r.events.find((e) => e.type === "error" && e.phase === "research");
+  if (err?.modelId !== "research") return [false, `nessun errore di ricerca (${JSON.stringify(err)?.slice(0, 80)})`, r.secs];
+  if (!errMsgs(r.state, "research").length) return [false, "errore di ricerca non salvato", r.secs];
+  if (r.secs > RESEARCH_TIMEOUT_S + 15) return [false, `troppo lento: ${r.secs.toFixed(0)} s`, r.secs];
+  const pr = await promptsOf("web-hang");
+  if (pr.some((p) => p.user.includes("RISULTATI DELLA RICERCA SUL WEB"))) return [false, "blocco di ricerca nei prompt senza dossier", r.secs];
+  return [true, `done in ${r.secs.toFixed(0)} s, errore non fatale: "${err.error.slice(0, 60)}…"`, r.secs];
+};
+
+const ATT_LONG = `INIZIO-ALL-1 ${"clausola di prova. ".repeat(300)} FINE-ALL-1`;
+
+// Allegati validi: testo completo nel prompt iniziale e del giudice, estratto nei round intermedi,
+// solo metadati nella cronologia, testo completo nel DB; non passano all'approfondimento.
+SCENARIOS.ad = async function ad() {
+  const max = 120;
+  const attachments = [
+    { name: "contratto.pdf", kind: "pdf", text: ATT_LONG },
+    { name: "note\n## finto titolo", kind: "text", text: "INIZIO-ALL-2 testo breve FINE-ALL-2" },
+  ];
+  const r = await debate("att-ok", ["ok-a", "ok-b"], 2, "ok-a", max * 1000, { extra: { attachments } });
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const meta = msgs(r.state, "_attachments", "start")[0];
+  let list = null;
+  try { list = JSON.parse(meta?.content ?? "null"); } catch { /* sotto */ }
+  if (!Array.isArray(list) || list.length !== 2 || list[0].chars !== ATT_LONG.length || list[1].kind !== "text") return [false, `metadati _attachments: ${meta?.content?.slice(0, 100)}`, r.secs];
+  if (JSON.stringify(r.state).includes("FINE-ALL-1")) return [false, "testo completo degli allegati restituito all'app", r.secs];
+  const db = new DatabaseSync(join(dataDir, "data", "council.db"), { readOnly: true });
+  const stored = db.prepare("SELECT text FROM attachments WHERE debate_id = ? ORDER BY id").all(r.id).map((x) => x.text);
+  db.close();
+  if (stored[0] !== ATT_LONG) return [false, `testo nel DB: ${stored.length} righe, primo ${stored[0]?.length} caratteri`, r.secs];
+  const pr = await promptsOf("att-ok");
+  const wrong = [];
+  for (const p of pr) {
+    const full = p.user.includes("ALLEGATI:\n### contratto.pdf") && p.user.includes("FINE-ALL-1") && p.user.includes("FINE-ALL-2");
+    const excerpt = p.user.includes("solo un estratto") && p.user.includes("INIZIO-ALL-1") && !p.user.includes("FINE-ALL-1");
+    if (p.user.includes("\n## finto titolo")) wrong.push(`${p.phase}: nome con a capo non ripulito`);
+    if ((p.phase === "initial" || p.phase === "verdict") && !full) wrong.push(`${p.phase}/${p.model}: allegati non completi`);
+    if ((p.phase === "critique" || p.phase === "revise") && !excerpt) wrong.push(`${p.phase}/${p.model}: estratto assente o troppo lungo`);
+  }
+  const phases = new Set(pr.map((p) => p.phase));
+  for (const ph of ["initial", "critique", "revise", "verdict"]) if (!phases.has(ph)) wrong.push(`nessun prompt ${ph}`);
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), r.secs];
+  // Approfondimento: solo domanda e verdetto della discussione madre.
+  const c = await api("POST", "/api/debates", { body: { question: QUESTION("att-child"), models: ["ok-a", "ok-b"], rounds: 0, judge: "ok-a", claudeModel: "sonnet", parentId: r.id } });
+  if (c.status !== 201) return [false, `approfondimento → ${c.status}`, r.secs];
+  const child = await followEvents(c.body.id, 60_000);
+  if (doneEvent(child.events)?.status !== "done") return [false, "approfondimento non concluso", r.secs];
+  const cp = await promptsOf("att-child");
+  const init = cp.find((p) => p.phase === "initial");
+  if (!init?.user.includes("DISCUSSIONE PRECEDENTE")) return [false, `approfondimento senza contesto (${cp.map((p) => p.phase).join(",")}: ${init?.user.slice(0, 80)})`, r.secs];
+  if (cp.some((p) => p.user.includes("INIZIO-ALL") || p.user.includes("ALLEGATI"))) return [false, "allegati della madre passati all'approfondimento", r.secs];
+  return [true, `allegati completi in initial/verdict, estratto in critique/revise, metadati in cronologia, testo nel DB, non ereditati`, r.secs];
+};
+
+// Allegati oltre i limiti o malformati, webSearch non booleano, corpo enorme: 400/413, mai 500.
+SCENARIOS.ae = async function ae() {
+  const started = Date.now();
+  const base = { question: QUESTION("att-bad"), models: ["ok-a", "ok-b"], rounds: 0, judge: "ok-a", claudeModel: "sonnet" };
+  const a = (text, extra = {}) => ({ name: "a.txt", kind: "text", text, ...extra });
+  const cases = [
+    ["attachments non elenco", { attachments: "x" }, 400],
+    ["attachments oggetto", { attachments: { name: "a" } }, 400],
+    ["6 allegati", { attachments: Array(6).fill(a("x")) }, 400],
+    ["allegato null", { attachments: [null] }, 400],
+    ["allegato elenco", { attachments: [["a"]] }, 400],
+    ["kind sconosciuto", { attachments: [a("x", { kind: "exe" })] }, 400],
+    ["kind mancante", { attachments: [{ name: "a", text: "x" }] }, 400],
+    ["text numero", { attachments: [a(42)] }, 400],
+    ["name mancante", { attachments: [{ kind: "pdf", text: "x" }] }, 400],
+    ["nome di 201 caratteri", { attachments: [a("x", { name: "n".repeat(201) })] }, 400],
+    ["testo di 40.001 caratteri", { attachments: [a("x".repeat(40_001))] }, 400],
+    ["totale 60.002 caratteri", { attachments: [a("x".repeat(30_001)), a("y".repeat(30_001))] }, 400],
+    ["webSearch stringa", { webSearch: "yes" }, 400],
+    ["webSearch numero", { webSearch: 1 }, 400],
+    ["corpo > 400.000 caratteri", { attachments: [a("x".repeat(410_000))] }, 413],
+  ];
+  const wrong = [];
+  for (const [name, extra, want] of cases) {
+    const r = await api("POST", "/api/debates", { body: { ...base, ...extra } }).catch((e) => ({ status: `errore ${e.message}` }));
+    if (r.status !== want) wrong.push(`${name}: atteso ${want}, avuto ${r.status}`);
+  }
+  // Nessun dibattito creato dalle richieste respinte.
+  const list = (await api("GET", "/api/debates?q=att-bad")).body ?? [];
+  if (list.length) wrong.push(`${list.length} dibattiti creati da richieste non valide`);
+  const secs = (Date.now() - started) / 1000;
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs];
+  return [true, `${cases.length} richieste non valide respinte con il codice giusto, nessun dibattito creato`, secs];
+};
+
+// Allegati esattamente al limite (5 × 12.000 = 60.000 caratteri) e un modello con il limite di token
+// al minuto di Groq gratis: quel modello esce in modo pulito (una chiamata, nessun ciclo), gli altri proseguono.
+SCENARIOS.af = async function af() {
+  const max = 90;
+  const attachments = Array.from({ length: 5 }, (_, i) => ({ name: `parte-${i + 1}.txt`, kind: "text", text: `P${i}`.padEnd(12_000, "z") }));
+  const before = (await api("GET", "/stats", { port: mockPort })).body?.calls?.tpm ?? 0;
+  const r = await debate("att-max", ["ok-a", "ok-b", "tpm"], 1, "ok-a", max * 1000, { extra: { attachments } });
+  const bad = expectDone(r, max);
+  if (bad) return [false, bad, r.secs];
+  const calls = ((await api("GET", "/stats", { port: mockPort })).body?.calls?.tpm ?? 0) - before;
+  const err = errMsgs(r.state, "tpm")[0]?.error ?? "";
+  if (!/too large|413/i.test(err)) return [false, `tpm senza errore "too large" (${err.slice(0, 60) || "nessuno"})`, r.secs];
+  if (calls > 2) return [false, `tpm chiamato ${calls} volte (riprova inutile)`, r.secs];
+  if (!okMsgs(r.state, "ok-a", "critique").length) return [false, "ok-a senza critica: i round non sono proseguiti", r.secs];
+  return [true, `done con 60.000 caratteri di allegati; tpm escluso dopo ${calls} chiamata/e: "${err.slice(0, 50)}…"`, r.secs];
+};
+
+// Annullamento mentre il ricercatore lavora: si ferma subito, nessuna risposta iniziale.
+SCENARIOS.ag = async function ag() {
+  const started = Date.now();
+  let id;
+  const p = debate("web-cancel-hang", ["ok-a", "ok-b"], 1, "ok-a", 40_000, { onStart: (x) => (id = x), extra: { webSearch: true } });
+  await new Promise((res) => setTimeout(res, 1500));
+  const c = await api("POST", `/api/debates/${id}/cancel`, { body: {} });
+  if (c.status !== 200) return [false, `cancel → ${c.status}`, (Date.now() - started) / 1000];
+  const tCancel = Date.now();
+  const r = await p;
+  const after = (Date.now() - tCancel) / 1000;
+  if (r.state?.status !== "cancelled") return [false, `stato "${r.state?.status}" dopo l'annullamento`, r.secs];
+  if (after > 3) return [false, `annullato ma dopo ${after.toFixed(1)} s`, r.secs];
+  if (phaseEvent(r.events, "initial") >= 0) return [false, "la fase iniziale è partita dopo l'annullamento", r.secs];
+  if (r.events.some((e) => e.type === "error" && e.phase === "research")) return [false, "annullamento registrato come errore di ricerca", r.secs];
+  return [true, `cancelled ${after.toFixed(1)} s dopo la richiesta, durante la ricerca`, r.secs];
+};
+
+// Ricerca con Claude (finta CLI nel PATH, mai quella vera): solo WebSearch/WebFetch concessi, isolamento
+// invariato (MCP, impostazioni, ambiente senza chiavi); da partecipante resta senza strumenti.
+SCENARIOS.ah = async function ah() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const tok = randomBytes(32).toString("hex");
+  const bin = await mkdtemp(join(tmpdir(), "council-chaos-bin-"));
+  extraDirs.push(bin);
+  await writeFile(join(bin, "claude"), `#!${process.execPath}\nprocess.stdin.resume();process.stdin.on("end",()=>{const n=Object.keys(process.env).filter(k=>/_KEY$|^COUNCIL_/.test(k));process.stdout.write(JSON.stringify({result:"ARGS"+JSON.stringify(process.argv.slice(2).filter(a=>a.length<80))+"ENV["+n.join(",")+"]"}))});\n`);
+  await chmod(join(bin, "claude"), 0o755);
+  const cfg = {
+    providers: { chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" } },
+    judge: { id: "j", label: "Giudice", kind: "openai", provider: "chaos", model: "ok-a" },
+    models: [
+      { id: "ok-a", label: "A", kind: "openai", provider: "chaos", model: "ok-a", family: "ok-a", default: false },
+      { id: "fakeclaude", label: "Finta Claude", kind: "claude-cli", model: "sonnet", default: false },
+    ],
+  };
+  const e = await startExtraEngine(cfg, JSON.stringify({ token: tok, keys: { CHAOS_KEY } }), { env: { PATH: `${bin}:${process.env.PATH}` } });
+  const ws = (await api("GET", "/api/models", { port: e.port, headers: authed(tok) })).body?.webSearch;
+  if (ws?.via !== "Claude") return [false, `/api/models webSearch = ${JSON.stringify(ws)}`, secs()];
+  const c = await api("POST", "/api/debates", { port: e.port, headers: authed(tok),
+    body: { question: QUESTION("web-claude"), models: ["ok-a", "fakeclaude"], rounds: 0, judge: "ok-a", claudeModel: "haiku", webSearch: true } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  let state;
+  for (let i = 0; i < 100; i++) {
+    state = (await api("GET", `/api/debates/${c.body.id}`, { port: e.port, headers: authed(tok) })).body;
+    if (state?.status && state.status !== "running") break;
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  e.proc.kill("SIGTERM");
+  if (state?.status !== "done") return [false, `stato "${state?.status}"`, secs()];
+  const res = okMsgs(state, "research:fakeclaude", "research")[0];
+  const part = okMsgs(state, "fakeclaude", "initial")[0];
+  if (!res || !part) return [false, `ricerca ${res ? "ok" : "assente"}, partecipante ${part ? "ok" : "assente"}`, secs()];
+  const args = (t) => JSON.parse(t.match(/^ARGS(\[.*\])ENV/)?.[1] ?? "[]");
+  const ra = args(res.content), pa = args(part.content);
+  const after = (list, flag) => list[list.indexOf(flag) + 1];
+  const wrong = [];
+  if (after(ra, "--tools") !== "WebSearch,WebFetch" || after(ra, "--allowedTools") !== "WebSearch,WebFetch") wrong.push(`ricerca: strumenti ${after(ra, "--tools")}`);
+  if (after(pa, "--tools") !== "" || pa.includes("--allowedTools")) wrong.push(`partecipante: strumenti ${JSON.stringify(after(pa, "--tools"))}`);
+  for (const f of ["--strict-mcp-config", "--no-session-persistence"]) if (!ra.includes(f)) wrong.push(`ricerca senza ${f}`);
+  if (after(ra, "--setting-sources") !== "") wrong.push("ricerca con impostazioni utente");
+  if (after(ra, "--model") !== "haiku") wrong.push(`ricerca con modello ${after(ra, "--model")}`);
+  if (!/ENV\[\]/.test(res.content)) wrong.push(`ambiente: ${res.content.match(/ENV\[.*\]/)?.[0]}`);
+  if (wrong.length) return [false, wrong.join("; "), secs()];
+  return [true, "ricerca con solo WebSearch/WebFetch e isolamento invariato; partecipante senza strumenti", secs()];
+};
+
 const DESCR = {
   y: "riavvio con dibattito running → interrupted", z: "SSE vivo durante il giudice lento",
   r: "corpo spezzato e corpi non-oggetto", s: "eliminazione a dibattito in corso", t: "SSE: ricollegamento a metà",
@@ -789,6 +1043,10 @@ const DESCR = {
   a: "ok-a + ok-b, 3 round", b: "ok-a + ok-b + hang, 2 round", b2: "un solo modello rimasto", c: "flaky-critique rientra", d: "ratelimit con attesa",
   e: "giudice hang → riserva", f: "html non alterato", g: "empty/crash500/gone esclusi", h: "huge 300k caratteri",
   i: "annullamento", j: "input non validi", l: "quota + length (extra)", k: "motore vivo alla fine",
+  aa: "ricerca sul web via Groq finto", ab: "ricerca senza ricercatore disponibile", ac: "ricercatore bloccato",
+  ad: "allegati nei prompt (e non negli approfondimenti)", ae: "allegati e webSearch non validi",
+  af: "allegati al limite + Groq TPM", ag: "annullamento durante la ricerca",
+  ah: "ricerca con Claude (CLI finta): strumenti e isolamento",
 };
 
 // ---------- main ----------
@@ -806,16 +1064,21 @@ async function main() {
     providers: {
       chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" },
       chaosbad: { name: "Chaos chiave rovinata", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_BAD_KEY" },
+      // "groq" finto: la voce GPT-OSS fa la ricerca sul web (browser_search) negli scenari aa, ac, ag.
+      groq: { name: "Groq finto", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" },
     },
     // Giudice predefinito non Claude: un modello "ritirato", così la catena di riserva passa ai partecipanti.
     judge: { id: "chaos-judge", label: "Chaos giudice predefinito", kind: "openai", provider: "chaos", model: "gone" },
     // Voce di famiglia: il modello principale si blocca, deve rispondere la riserva ok-b.
     models: [...MODELS.map(member), { id: "voce", label: "Voce di famiglia", kind: "openai", provider: "chaos", family: "voce", model: "hang", fallback: ["ok-b"], default: false },
-      { id: "badkey", label: "Chiave rovinata", kind: "openai", provider: "chaosbad", model: "ok-a", family: "badkey", default: false }],
+      { id: "badkey", label: "Chiave rovinata", kind: "openai", provider: "chaosbad", model: "ok-a", family: "badkey", default: false },
+      { id: "gptoss", label: "GPT-OSS", kind: "openai", provider: "groq", model: "openai/gpt-oss-120b", family: "gpt-oss", default: false }],
   }, null, 2));
 
   // Avviato come dall'app: token sulla prima riga dello stdin, chiusura con lo stdin.
-  const env = { ...process.env, COUNCIL_DATA: dataDir, COUNCIL_MODELS: cfgPath, PORT: "0", CHAOS_KEY, CHAOS_BAD_KEY, COUNCIL_PARENT: "app" };
+  // Ricerca sul web con tempo massimo breve (6 s invece di 180 s): scenari ac e ag.
+  const env = { ...process.env, COUNCIL_DATA: dataDir, COUNCIL_MODELS: cfgPath, PORT: "0", CHAOS_KEY, CHAOS_BAD_KEY, COUNCIL_PARENT: "app",
+    COUNCIL_RESEARCH_TIMEOUT_MS: String(RESEARCH_TIMEOUT_S * 1000) };
   delete env.ANTHROPIC_API_KEY;
   const e = await startProcess(process.execPath, ["--disable-warning=ExperimentalWarning", "src/server.ts"], env, "COUNCIL_PORT",
     JSON.stringify({ token: TOKEN }));

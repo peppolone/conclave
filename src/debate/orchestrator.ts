@@ -3,8 +3,9 @@ import { chat } from "../adapters/index.ts";
 import { saveMessage, finishDebate } from "../db.ts";
 import * as P from "./prompts.ts";
 import { redact } from "../redact.ts";
+import { findResearcher, runResearch } from "./research.ts";
 
-export type Phase = "initial" | "critique" | "revise" | "final" | "verdict";
+export type Phase = "research" | "initial" | "critique" | "revise" | "final" | "verdict";
 
 export type Rounds = 0 | 1 | 2 | 3;
 
@@ -17,6 +18,10 @@ export interface DebateOptions {
   claudeModel: string;
   /** Approfondimento di un dibattito concluso. */
   parentContext?: P.ParentContext & { id: number };
+  /** Ricerca sul web prima della fase iniziale. */
+  webSearch?: boolean;
+  /** Allegati (testo già estratto dall'app). Non passano agli approfondimenti. */
+  attachments?: P.Attachment[];
 }
 
 export type DebateEvent =
@@ -48,6 +53,11 @@ const LETTERS = "ABCDEFGHIJKL";
 /** Tempo massimo per un intervento (riserve e attese comprese): oltre, il modello salta il round. */
 const PARTICIPANT_BUDGET_MS = 75_000;
 const JUDGE_BUDGET_MS = 150_000;
+/** Tempo massimo della ricerca sul web (oltre: errore non fatale). Abbreviabile solo per le prove. */
+const RESEARCH_BUDGET_MS = (() => {
+  const t = Number(process.env.COUNCIL_RESEARCH_TIMEOUT_MS);
+  return Number.isInteger(t) && t >= 1000 && t < 180_000 ? t : 180_000;
+})();
 
 function shuffle<T>(a: T[]): T[] {
   const r = [...a];
@@ -77,6 +87,12 @@ export async function runDebate(
   const participants = ds.map((d) => ({ id: d.def.id, label: d.def.label, letter: d.letter }));
   // Salvate per poter rileggere a chi corrisponde ogni lettera nella cronologia.
   saveMessage(debateId, { model_id: "_meta", phase: "start", content: JSON.stringify(participants), error: null, ms: null });
+  // Solo i metadati: il testo completo resta nella tabella degli allegati, non torna all'app.
+  if (opts.attachments?.length) {
+    const meta = opts.attachments.map((a) => ({ name: a.name, kind: a.kind, chars: a.text.length }));
+    saveMessage(debateId, { model_id: "_attachments", phase: "start", content: JSON.stringify(meta), error: null, ms: null });
+  }
+  const material: P.Material = { attachments: opts.attachments?.length ? opts.attachments : undefined };
   emit({
     type: "start", debateId, participants,
     rounds: opts.rounds, judge: chosenJudge.label, parentId: opts.parentContext?.id ?? null,
@@ -129,9 +145,38 @@ export async function runDebate(
   const others = (d: Debater, pick: (x: Debater) => string | undefined): P.Labeled[] =>
     alive().filter((x) => x !== d && pick(x)).map((x) => ({ label: x.letter, text: pick(x)! }));
 
+  /**
+   * Ricerca sul web: un solo ricercatore, prima delle risposte. Ogni esito diverso dal
+   * dossier (nessun ricercatore, errore, tempo scaduto) è non fatale: il dibattito prosegue.
+   */
+  async function research(): Promise<void> {
+    const who = findResearcher();
+    if (!who) {
+      const note = "Ricerca sul web non disponibile: serve Claude oppure una chiave Groq con GPT-OSS.";
+      emit({ type: "phase", phase: "research", note });
+      saveMessage(debateId, { model_id: "_note", phase: "research", content: note, error: null, ms: null });
+      return;
+    }
+    emit({ type: "phase", phase: "research" });
+    try {
+      const r = await withBudget(RESEARCH_BUDGET_MS, (budget) => runResearch(who, question, opts.claudeModel, budget));
+      const modelId = `research:${who.def.id}`;
+      material.research = { text: r.text, date: new Date().toISOString().slice(0, 10) };
+      saveMessage(debateId, { model_id: modelId, phase: "research", content: r.text, error: null, ms: r.ms, model_used: r.model, replaced: r.replaced });
+      emit({ type: "message", phase: "research", modelId, text: r.text, ms: r.ms, model: r.model, replaced: r.replaced });
+    } catch (e) {
+      if (signal.aborted) throw new Error("cancelled");
+      const error = `ricerca non riuscita, il dibattito prosegue senza (${(e as Error).message})`;
+      saveMessage(debateId, { model_id: "research", phase: "research", content: null, error, ms: null });
+      emit({ type: "error", phase: "research", modelId: "research", error });
+    }
+  }
+
   try {
+    if (opts.webSearch) await research();
+
     // Fase iniziale: risposte indipendenti.
-    await phase("initial", () => P.initialPrompt(question, parent), (d, t) => (d.initial = t));
+    await phase("initial", () => P.initialPrompt(question, parent, material), (d, t) => (d.initial = t));
 
     if (opts.rounds >= 1 && alive().length === 1) {
       // Da soli non si discute: si va direttamente al verdetto, e lo si dice.
@@ -143,7 +188,7 @@ export async function runDebate(
       const devil = alive()[Math.floor(Math.random() * alive().length)];
       await phase(
         "critique",
-        (d) => P.critiquePrompt(question, d.initial!, others(d, (x) => x.initial), d === devil),
+        (d) => P.critiquePrompt(question, d.initial!, others(d, (x) => x.initial), d === devil, material),
         (d, t) => (d.critique = t),
         () => {},
       );
@@ -151,7 +196,7 @@ export async function runDebate(
       if (opts.rounds >= 2) {
         // Round 2: ognuno risponde alle critiche e rivede la propria risposta.
         const allCritiques = () => alive().filter((x) => x.critique).map((x) => ({ label: x.letter, text: x.critique! }));
-        await phase("revise", (d) => P.revisePrompt(question, d.initial!, allCritiques()), (d, t) => (d.revised = t),
+        await phase("revise", (d) => P.revisePrompt(question, d.initial!, allCritiques(), material), (d, t) => (d.revised = t),
           (d) => { d.revised = d.initial; });
 
         if (opts.rounds >= 3) {
@@ -164,7 +209,7 @@ export async function runDebate(
             saveMessage(debateId, { model_id: "_note", phase: "final", content: note, error: null, ms: null });
             for (const d of alive()) d.final = d.revised;
           } else {
-            await phase("final", (d) => P.finalPrompt(question, d.revised!, others(d, (x) => x.revised)), (d, t) => (d.final = t),
+            await phase("final", (d) => P.finalPrompt(question, d.revised!, others(d, (x) => x.revised), material), (d, t) => (d.final = t),
               (d) => { d.final = d.revised; });
           }
         }
@@ -184,7 +229,7 @@ export async function runDebate(
     for (const m of [chosenJudge, withClaude(config.judge), ...alive().map((d) => d.def)]) {
       if (!judges.some((j) => j.id === m.id)) judges.push(m);
     }
-    const judgeUser = P.judgePrompt(question, finals, critiques, parent);
+    const judgeUser = P.judgePrompt(question, finals, critiques, parent, material);
     let verdict: string | undefined;
     let title: string | null = null;
     for (const j of judges) {

@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection } from "./config.ts";
-import { createDebate, listDebates, getDebate, deleteDebate } from "./db.ts";
+import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection, type ModelDef } from "./config.ts";
+import { createDebate, listDebates, getDebate, deleteDebate, saveAttachments } from "./db.ts";
 import { runDebate, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
+import type { Attachment } from "./debate/prompts.ts";
+import { findResearcher } from "./debate/research.ts";
 import { listCatalog, probe } from "./catalog.ts";
 import { getHealth, runHealthCheck, isChecking } from "./health.ts";
 import { engineToken } from "./bootstrap.ts";
@@ -20,6 +22,8 @@ const running = new Map<number, Running>();
 /** Oltre questo numero il dibattito diventa lento e consuma quote senza aggiungere idee nuove. */
 const MAX_PARTICIPANTS = 10;
 const SSE_PING_MS = 10_000;
+/** Corpo massimo di una richiesta: domanda + allegati (60.000 caratteri) con il margine dell'escape JSON. */
+const MAX_BODY = 400_000;
 
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku"];
 const DEFAULT_ROUNDS: Rounds = 3;
@@ -53,7 +57,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   req.setEncoding("utf8");
   for await (const chunk of req) {
     s += chunk;
-    if (s.length > 100_000) throw new BadRequest(413, "richiesta troppo grande");
+    if (s.length > MAX_BODY) throw new BadRequest(413, "richiesta troppo grande");
   }
   try { return JSON.parse(s || "{}"); } catch { throw new BadRequest(400, "JSON non valido"); }
 }
@@ -71,6 +75,92 @@ function send(r: Running, e: DebateEvent) {
   for (const c of r.clients) c.write(line);
 }
 
+// ---- Validazione di POST /api/debates ----
+
+const MAX_QUESTION = 20_000;
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_TEXT = 40_000;
+const MAX_ATTACHMENTS_TOTAL = 60_000;
+const MAX_ATTACHMENT_NAME = 200;
+const ATTACHMENT_KINDS = ["pdf", "text", "image"] as const;
+
+interface DebateRequest {
+  question: string;
+  models: ModelDef[];
+  rounds: Rounds;
+  judge: ModelDef;
+  claudeModel: string;
+  parentContext?: { id: number; question: string; verdict: string };
+  webSearch: boolean;
+  attachments: Attachment[];
+}
+
+const fmt = (n: number) => n.toLocaleString("it-IT");
+
+/** Allegati: testo già estratto dall'app. Lunghezze in unità UTF-16 (String.length, come la domanda). */
+function parseAttachments(raw: unknown): Attachment[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new BadRequest(400, "attachments deve essere un elenco");
+  if (raw.length > MAX_ATTACHMENTS) throw new BadRequest(400, `massimo ${MAX_ATTACHMENTS} allegati`);
+  let total = 0;
+  return raw.map((a, i) => {
+    if (a === null || typeof a !== "object" || Array.isArray(a)) throw new BadRequest(400, `allegato ${i + 1} non valido`);
+    const { name, kind, text } = a as Record<string, unknown>;
+    if (typeof name !== "string" || typeof text !== "string") throw new BadRequest(400, `allegato ${i + 1}: name e text devono essere testi`);
+    if (!ATTACHMENT_KINDS.includes(kind as Attachment["kind"])) throw new BadRequest(400, `allegato ${i + 1}: kind deve essere pdf, text o image`);
+    if (name.length > MAX_ATTACHMENT_NAME) throw new BadRequest(400, `allegato ${i + 1}: nome troppo lungo (max ${MAX_ATTACHMENT_NAME} caratteri)`);
+    if (text.length > MAX_ATTACHMENT_TEXT) throw new BadRequest(400, `allegato ${i + 1}: testo troppo lungo (max ${fmt(MAX_ATTACHMENT_TEXT)} caratteri)`);
+    total += text.length;
+    if (total > MAX_ATTACHMENTS_TOTAL) throw new BadRequest(400, `allegati troppo lunghi in totale (max ${fmt(MAX_ATTACHMENTS_TOTAL)} caratteri)`);
+    // Il nome finisce in un'intestazione del prompt: una riga sola, senza caratteri di controllo.
+    const clean = name.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/^[#\s]+/, "").trim();
+    return { name: clean || `allegato ${i + 1}`, kind: kind as Attachment["kind"], text: text.replace(/\u0000/g, "") };
+  });
+}
+
+/** Controlla e normalizza la richiesta di un nuovo dibattito: ogni problema è un 400, mai un 500. */
+function parseDebateRequest(body: Record<string, unknown>): DebateRequest {
+  if (body.models !== undefined && !Array.isArray(body.models)) throw new BadRequest(400, "models deve essere un elenco");
+  const question = String(body.question ?? "").trim();
+  if (question.length > MAX_QUESTION) throw new BadRequest(400, `domanda troppo lunga (max ${fmt(MAX_QUESTION)} caratteri)`);
+  // Id duplicati ignorati: lo stesso modello due volte non aggiunge una voce nuova.
+  const ids = [...new Set(((body.models as unknown[] | undefined) ?? []).filter((x): x is string => typeof x === "string"))];
+  const models = ids.map(findModel).filter((m): m is ModelDef => !!m && isAvailable(m));
+  if (!question) throw new BadRequest(400, "domanda vuota");
+  if (models.length < 2) throw new BadRequest(400, "seleziona almeno 2 modelli disponibili");
+  if (models.length > MAX_PARTICIPANTS) throw new BadRequest(400, `massimo ${MAX_PARTICIPANTS} partecipanti`);
+
+  const rounds = body.rounds ?? DEFAULT_ROUNDS;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0 || rounds > 3) {
+    throw new BadRequest(400, "rounds deve essere 0, 1, 2 o 3");
+  }
+  const claudeModel = body.claudeModel ?? config.judge.model;
+  if (typeof claudeModel !== "string" || !CLAUDE_MODELS.includes(claudeModel)) {
+    throw new BadRequest(400, `claudeModel deve essere uno tra: ${CLAUDE_MODELS.join(", ")}`);
+  }
+  const judgeId = body.judge ?? DEFAULT_JUDGE;
+  const judge = judgeId === DEFAULT_JUDGE
+    ? config.judge
+    : typeof judgeId === "string" ? config.models.find((m) => m.id === judgeId && isAvailable(m)) : undefined;
+  if (!judge) throw new BadRequest(400, "giudice non valido o non disponibile");
+
+  let parentContext: DebateRequest["parentContext"];
+  if (body.parentId !== undefined && body.parentId !== null) {
+    const pid = body.parentId;
+    const parent = typeof pid === "number" && Number.isInteger(pid) ? getDebate(pid) : undefined;
+    if (!parent) throw new BadRequest(400, "dibattito precedente non trovato");
+    if (parent.status !== "done" || !parent.verdict) throw new BadRequest(400, "il dibattito precedente non è concluso");
+    // Solo domanda e verdetto: gli allegati della discussione madre non passano all'approfondimento.
+    parentContext = { id: parent.id, question: parent.question, verdict: parent.verdict };
+  }
+
+  if (body.webSearch !== undefined && body.webSearch !== null && typeof body.webSearch !== "boolean") {
+    throw new BadRequest(400, "webSearch deve essere true o false");
+  }
+  const attachments = parseAttachments(body.attachments);
+  return { question, models, rounds: rounds as Rounds, judge, claudeModel, parentContext, webSearch: body.webSearch === true, attachments };
+}
+
 async function handle(req: IncomingMessage, res: ServerResponse) {
   // Accetta solo richieste dirette a localhost (protezione da DNS rebinding).
   const host = (req.headers.host ?? "").split(":")[0];
@@ -83,6 +173,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const idMatch = path.match(/^\/api\/debates\/(\d+)(\/events|\/cancel)?$/);
 
   if (req.method === "GET" && path === "/api/models") {
+    const researcher = findResearcher();
     return json(res, 200, {
       judge: config.judge.label,
       native: process.env.COUNCIL_PARENT === "app",
@@ -93,6 +184,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         id: m.id, label: m.label, default: !!m.default, available: isAvailable(m),
         provider: m.provider ?? "abbonamento", model: m.model, health: getHealth(m.id),
       })),
+      webSearch: { available: researcher !== null, via: researcher?.via ?? null },
     });
   }
 
@@ -145,51 +237,20 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (req.method === "POST" && path === "/api/debates") {
     // Solo JSON: impedisce a pagine esterne di avviare dibattiti con un semplice form.
     if (!isJsonPost()) return json(res, 415, { error: "serve JSON" });
-    const body = (await readObject(req)) as {
-      question?: string; models?: string[]; rounds?: unknown; claudeModel?: unknown; judge?: unknown; parentId?: unknown;
-    };
-    if (body.models !== undefined && !Array.isArray(body.models)) return json(res, 400, { error: "models deve essere un elenco" });
-    const question = String(body.question ?? "").trim();
-    if (question.length > 20_000) return json(res, 400, { error: "domanda troppo lunga (max 20.000 caratteri)" });
-    // Id duplicati ignorati: lo stesso modello due volte non aggiunge una voce nuova.
-    const ids = [...new Set((body.models ?? []).filter((x): x is string => typeof x === "string"))];
-    const defs = ids.map(findModel).filter((m) => m && isAvailable(m)) as NonNullable<ReturnType<typeof findModel>>[];
-    if (!question) return json(res, 400, { error: "domanda vuota" });
-    if (defs.length < 2) return json(res, 400, { error: "seleziona almeno 2 modelli disponibili" });
-    if (defs.length > MAX_PARTICIPANTS) return json(res, 400, { error: `massimo ${MAX_PARTICIPANTS} partecipanti` });
-
-    const rounds = body.rounds ?? DEFAULT_ROUNDS;
-    if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0 || rounds > 3) {
-      return json(res, 400, { error: "rounds deve essere 0, 1, 2 o 3" });
-    }
-    const claudeModel = body.claudeModel ?? config.judge.model;
-    if (typeof claudeModel !== "string" || !CLAUDE_MODELS.includes(claudeModel)) {
-      return json(res, 400, { error: `claudeModel deve essere uno tra: ${CLAUDE_MODELS.join(", ")}` });
-    }
-    const judgeId = body.judge ?? DEFAULT_JUDGE;
-    const judgeDef = judgeId === DEFAULT_JUDGE
-      ? config.judge
-      : typeof judgeId === "string" ? config.models.find((m) => m.id === judgeId && isAvailable(m)) : undefined;
-    if (!judgeDef) return json(res, 400, { error: "giudice non valido o non disponibile" });
-
-    let parentContext: { id: number; question: string; verdict: string } | undefined;
-    if (body.parentId !== undefined && body.parentId !== null) {
-      const pid = body.parentId;
-      const parent = typeof pid === "number" && Number.isInteger(pid) ? getDebate(pid) : undefined;
-      if (!parent) return json(res, 400, { error: "dibattito precedente non trovato" });
-      if (parent.status !== "done" || !parent.verdict) return json(res, 400, { error: "il dibattito precedente non è concluso" });
-      parentContext = { id: parent.id, question: parent.question, verdict: parent.verdict };
-    }
-
+    const d = parseDebateRequest(await readObject(req));
     const id = createDebate(
-      question, defs.map((d) => d.id),
-      { rounds, judge: judgeDef.id, claudeModel },
-      parentContext?.id ?? null,
+      d.question, d.models.map((m) => m.id),
+      { rounds: d.rounds, judge: d.judge.id, claudeModel: d.claudeModel, ...(d.webSearch ? { webSearch: true } : {}) },
+      d.parentContext?.id ?? null,
     );
+    if (d.attachments.length) saveAttachments(id, d.attachments);
     const r: Running = { events: [], clients: new Set(), controller: new AbortController() };
     running.set(id, r);
-    const opts = { rounds: rounds as Rounds, judge: judgeDef, claudeModel, parentContext };
-    runDebate(id, question, defs, opts, (e) => send(r, e), r.controller.signal).catch(logError(`dibattito ${id}`)).finally(() => {
+    const opts = {
+      rounds: d.rounds, judge: d.judge, claudeModel: d.claudeModel, parentContext: d.parentContext,
+      webSearch: d.webSearch, attachments: d.attachments,
+    };
+    runDebate(id, d.question, d.models, opts, (e) => send(r, e), r.controller.signal).catch(logError(`dibattito ${id}`)).finally(() => {
       for (const c of r.clients) c.end();
       // Tiene gli eventi in memoria ancora un po' per chi si ricollega.
       setTimeout(() => running.delete(id), 60_000);

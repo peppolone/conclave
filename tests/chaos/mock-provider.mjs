@@ -11,8 +11,15 @@ import { pathToFileURL } from "node:url";
 
 export const MODELS = [
   "ok-a", "ok-b", "hang", "slow", "ratelimit", "quota", "crash500",
-  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm", "leaky", "titleonly",
+  "empty", "huge", "html", "flaky-critique", "length", "gone", "otpm", "leaky", "titleonly", "tpm",
 ];
+
+/** Modelli di Groq che supportano browser_search: elencati in /models, non membri del consiglio di prova. */
+export const SEARCH_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+
+/** Testo del dossier finto: con un rimando interno di GPT-OSS da ripulire e una fonte. */
+export const DOSSIER_MARK = "DOSSIER-CHAOS-7731";
+export const DOSSIER_URL = "https://example.org/fonte-chaos";
 
 /** Chiave Google finta (formato reale) che "leaky" ripete nei suoi errori. */
 export const FAKE_GOOGLE_KEY = "AIzaSyChaos0123456789abcdefghijklmnopq";
@@ -22,6 +29,8 @@ const probes = Object.create(null);  // prove del controllo d'avvio per modello
 const auths = Object.create(null);   // intestazione Authorization ricevuta per modello ("whoami")
 const seenPhase = new Set();         // "ratelimit": prima chiamata per fase già vista
 let hanging = 0;                     // connessioni "hang" ancora aperte
+/** Prompt ricevuti per scenario (solo scenari "web…" e "att…"): /prompts/<scenario>. */
+const prompts = Object.create(null);
 
 /** Fase del dibattito ricavata dal prompt. */
 function phaseOf(system, user) {
@@ -32,9 +41,12 @@ function phaseOf(system, user) {
   return "initial";
 }
 
-/** Etichetta dello scenario inserita nella domanda: "[scenario:x]". */
+/**
+ * Etichetta dello scenario inserita nella domanda: "[scenario:x]". Vale l'ultima: negli
+ * approfondimenti la domanda della discussione madre (con la sua etichetta) viene prima.
+ */
 function scenarioOf(user) {
-  return user.match(/\[scenario:([\w-]+)\]/)?.[1] ?? "?";
+  return [...user.matchAll(/\[scenario:([\w-]+)\]/g)].at(-1)?.[1] ?? "?";
 }
 
 function okText(model, user) {
@@ -86,8 +98,10 @@ async function handle(req, res) {
   const path = new URL(req.url ?? "/", "http://x").pathname.replace(/\/+$/, "");
 
   if (req.method === "GET" && path.endsWith("/models")) {
-    return send(res, 200, { object: "list", data: [...MODELS, "paced", "whoami"].map((id) => ({ id, object: "model", owned_by: "chaos" })) });
+    return send(res, 200, { object: "list", data: [...MODELS, ...SEARCH_MODELS, "paced", "whoami"].map((id) => ({ id, object: "model", owned_by: "chaos" })) });
   }
+  const pm = path.match(/\/prompts\/([\w-]+)$/);
+  if (req.method === "GET" && pm) return send(res, 200, prompts[pm[1]] ?? []);
   if (req.method === "GET" && path.endsWith("/stats")) {
     return send(res, 200, { calls, probes, hanging, auths });
   }
@@ -106,6 +120,14 @@ async function handle(req, res) {
     return send(res, 200, completion(model, "OK"));
   }
   calls[model] = (calls[model] ?? 0) + 1;
+  const searching = Array.isArray(body.tools) && body.tools.some((t) => t?.type === "browser_search");
+  const scenario = scenarioOf(user);
+  if (/^(web|att)/.test(scenario)) {
+    (prompts[scenario] ??= []).push({
+      model, phase: searching ? "research" : phaseOf(system, user), system, user,
+      tools: body.tools ?? null, reasoning_effort: body.reasoning_effort ?? null, max_tokens: body.max_tokens ?? null,
+    });
+  }
 
   switch (model) {
     case "ok-a":
@@ -170,6 +192,29 @@ async function handle(req, res) {
       // Da giudice scrive solo la riga del titolo: il verdetto resta vuoto.
       if (phaseOf(system, user) === "verdict") return send(res, 200, completion(model, "TITOLO: Solo il titolo"));
       return send(res, 200, completion(model, okText(model, user)));
+    case "openai/gpt-oss-120b":
+    case "openai/gpt-oss-20b":
+      // Come GPT-OSS su Groq: con browser_search produce il dossier (con i rimandi 【…】).
+      if (!searching) return send(res, 200, completion(model, okText(model, user)));
+      if (/hang/.test(scenario)) {
+        hanging++;
+        req.socket.setTimeout(0);
+        res.on("close", () => hanging--);
+        return; // la ricerca non finisce mai
+      }
+      {
+        const c = completion(model, `## Punti chiave\n- ${DOSSIER_MARK}: il treno impiega 3 ore 【2†L6-L10】.\n## Fonti\n- Fonte di prova: ${DOSSIER_URL}`);
+        // Pagine consultate dallo strumento: quella non citata nel testo va aggiunta dal motore.
+        c.choices[0].message.executed_tools = [{ type: "browser_search", search_results: { results: [
+          { title: "x", url: DOSSIER_URL }, { title: "y", url: "https://example.org/altra" }] } }];
+        return send(res, 200, c);
+      }
+    case "tpm": {
+      // Come Groq gratis (~8.000 token al minuto): un prompt enorme viene rifiutato con 413.
+      const chars = system.length + user.length;
+      if (chars > 20_000) return send(res, 413, err(`Request too large for model \`tpm\` in organization org-chaos service tier \`on_demand\` on tokens per minute (TPM): Limit 8000, Requested ${Math.round(chars / 4)}, please reduce your message size and try again.`, "tokens"));
+      return send(res, 200, completion(model, okText(model, user)));
+    }
     case "gone":
       return send(res, 404, err(`The model \`${model}\` does not exist or you do not have access to it. model not found`, "invalid_request_error"));
     default:

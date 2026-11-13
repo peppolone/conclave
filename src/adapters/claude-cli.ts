@@ -9,6 +9,8 @@ import { appKeyNames } from "../bootstrap.ts";
 // Cartella vuota come cwd: Claude non vede file di progetto.
 const SANDBOX_DIR = mkdtempSync(join(tmpdir(), "conclave-"));
 const TIMEOUT_MS = 240_000;
+/** Unici strumenti concessi per la ricerca sul web (inclusi nell'abbonamento). */
+const WEB_TOOLS = "WebSearch,WebFetch";
 
 /** Processi `claude` in corso: alla chiusura del motore vanno fermati, o continuano a consumare l'abbonamento. */
 const children = new Set<ChildProcess>();
@@ -18,7 +20,8 @@ export function killClaudeChildren(): void {
 
 /**
  * Chiama Claude Code in modalità non interattiva usando l'abbonamento Pro.
- * Nessun tool, nessun MCP, nessuna impostazione utente: solo testo.
+ * Nessun tool, nessun MCP, nessuna impostazione utente: solo testo. Con `webSearch` può usare
+ * solo gli strumenti di ricerca e lettura di pagine web (niente file, niente comandi).
  */
 export function chatClaude(model: string, req: ChatRequest): Promise<ChatResult> {
   const started = Date.now();
@@ -35,7 +38,9 @@ export function chatClaude(model: string, req: ChatRequest): Promise<ChatResult>
   const args = [
     "-p",
     "--output-format", "json",
-    "--tools", "",
+    ...(req.webSearch
+      ? ["--tools", WEB_TOOLS, "--allowedTools", WEB_TOOLS]
+      : ["--tools", ""]),
     "--no-session-persistence",
     "--strict-mcp-config",
     "--setting-sources", "",
