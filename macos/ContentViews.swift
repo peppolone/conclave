@@ -634,15 +634,20 @@ struct DebateView: View {
                     if debate.isRunning { progressBar.padding(.top, 14) }
 
                     // Il verdetto è il risultato: viene subito dopo l'intestazione, prima dello svolgimento.
-                    if let v = debate.verdict {
-                        verdictBox(v, by: debate.verdictBy, confidence: debate.confidence).id("phase-verdict")
-                            .padding(.top, 24)
-                            .transition(.opacity)
-                    } else if debate.isRunning && debate.judging {
-                        // Segnaposto al posto del verdetto: la vista dal vivo sale qui mentre il giudice scrive.
-                        judgingPlaceholder
-                            .id("phase-verdict")
-                            .padding(.top, 24)
+                    // Una sola riga con un'identità sola per segnaposto e verdetto: con due rami `if/else`
+                    // entrambi con id "phase-verdict" la pila pigra aveva due righe con lo stesso id
+                    // nello stesso aggiornamento e restava bloccata sul segnaposto (e con lei la vista).
+                    if debate.verdict != nil || (debate.isRunning && debate.judging) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if let v = debate.verdict {
+                                verdictBox(v, by: debate.verdictBy, confidence: debate.confidence)
+                            } else {
+                                // Segnaposto al posto del verdetto: la vista dal vivo sale qui mentre il giudice scrive.
+                                judgingPlaceholder
+                            }
+                        }
+                        .id("phase-verdict")
+                        .padding(.top, 24)
                     }
 
                     if !debate.phases.isEmpty {
@@ -1219,14 +1224,19 @@ extension DebateView {
             // Turno del consiglio: come il dibattito originale, il verdetto (o il segnaposto mentre il
             // giudice scrive) viene subito dopo la domanda, lo svolgimento sotto.
             let gap: CGFloat = t.phases.isEmpty ? 0 : 28
-            if let v = t.verdict {
-                verdictBox(v, by: t.verdictBy, confidence: t.confidence, key: "turn-\(n)")
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel(String(format: L("Verdetto della domanda di seguito %d"), n))
-                    .id("turn-\(n)-verdict")
-                    .padding(.bottom, gap)
-            } else if t.isRunning && t.judging {
-                judgingPlaceholder.id("turn-\(n)-verdict").padding(.bottom, gap)
+            // Segnaposto e verdetto in una sola riga con un solo id (vedi il verdetto del dibattito).
+            if t.verdict != nil || (t.isRunning && t.judging) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let v = t.verdict {
+                        verdictBox(v, by: t.verdictBy, confidence: t.confidence, key: "turn-\(n)")
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel(String(format: L("Verdetto della domanda di seguito %d"), n))
+                    } else {
+                        judgingPlaceholder
+                    }
+                }
+                .id("turn-\(n)-verdict")
+                .padding(.bottom, gap)
             } else if !t.isRunning || t.phases.isEmpty {
                 turnStatus(t).id("turn-\(n)-status").padding(.bottom, gap)
             }
@@ -1341,15 +1351,17 @@ private struct FollowupBar: View {
 
     private var box: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Mai disabilitato: come nella chat di Claude si può scrivere mentre arriva la risposta,
+            // si blocca solo l'invio (`canSendFollowup`). Un `TextField(axis: .vertical)` disabilitato e poi
+            // riabilitato restava con il cursore ma non accettava più il testo.
             TextField("Domanda di seguito", text: $store.followup,
-                      prompt: running ? Text("Attendi la risposta…") : Text("Chiedi ancora qualcosa su questa discussione…"),
+                      prompt: Text("Chiedi ancora qualcosa su questa discussione…"),
                       axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .lineLimit(1...8)
                 .lineSpacing(2)
                 .focused($focused)
-                .disabled(running || store.sendingFollowup)
                 .accessibilityLabel(L("Domanda di seguito"))
 
             if !store.followupAttachments.isEmpty {
