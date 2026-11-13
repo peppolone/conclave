@@ -1032,6 +1032,457 @@ SCENARIOS.ah = async function ah() {
   return [true, "ricerca con solo WebSearch/WebFetch e isolamento invariato; partecipante senza strumenti", secs()];
 };
 
+// ---------- chat continua: turni dopo il verdetto ----------
+
+const FQ = (tag, text) => `[scenario:${tag}] ${text}`;
+const followupPath = (id) => `/api/debates/${id}/followups`;
+const turnMsgs = (state, turn) => (state?.messages ?? []).filter((m) => (m.turn ?? 0) === turn);
+
+/** Domanda di seguito: POST, poi segue il flusso del turno fino a done e rilegge lo stato. */
+async function turnOf(id, body, timeoutMs) {
+  const started = Date.now();
+  const post = await api("POST", followupPath(id), { body: { claudeModel: "sonnet", ...body } });
+  if (post.status !== 201) return { post, events: [], state: null, secs: (Date.now() - started) / 1000 };
+  const { events, timedOut } = await followEvents(id, timeoutMs);
+  const state = await finalState(id);
+  return { post, turn: post.body?.turn, events, timedOut, state, secs: (Date.now() - started) / 1000 };
+}
+
+/** Dibattito di partenza concluso (2 modelli ok, nessun round). */
+async function baseDebate(tag, extra) {
+  const r = await debate(tag, ["ok-a", "ok-b"], 0, "ok-a", 60_000, { extra });
+  const bad = expectDone(r, 60);
+  if (bad) throw new Error(`dibattito di partenza: ${bad}`);
+  return r;
+}
+
+// Risposta rapida: turno 1 con eventi tutti marcati, cronologia del turno, verdetto e titolo invariati,
+// prompt con domanda originale, allegati completi, verdetto e nuova domanda (in quest'ordine).
+SCENARIOS.ai = async function ai() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-quick", { attachments: [{ name: "orari.txt", kind: "text", text: "INIZIO-CONV-ALL orari dei treni FINE-CONV-ALL" }] });
+  const NEWQ = FQ("conv-quick", "E se viaggio di notte?");
+  const t = await turnOf(r.id, { question: NEWQ, responder: "ok-b", attachments: [{ name: "nota.txt", kind: "text", text: "INIZIO-TURNO-ALL nota del turno FINE-TURNO-ALL" }] }, 60_000);
+  if (t.post.status !== 201 || t.turn !== 1) return [false, `POST followups → ${t.post.status} ${t.post.text.slice(0, 100)}`, secs()];
+  const wrong = [];
+  const att = turnMsgs(t.state, 1).find((m) => m.model_id === "_attachments");
+  if (!att?.content?.includes("nota.txt")) wrong.push("_attachments del turno mancante");
+  if (JSON.stringify(t.state).includes("FINE-TURNO-ALL")) wrong.push("testo degli allegati del turno restituito all'app");
+  const first = t.events[0];
+  if (first?.type !== "turn" || first.turn !== 1 || first.mode !== "quick" || first.question !== NEWQ) wrong.push(`primo evento ${JSON.stringify(first)?.slice(0, 80)}`);
+  if (t.events.some((e) => e.turn !== 1)) wrong.push("eventi senza turn: 1");
+  const msg = t.events.find((e) => e.type === "message");
+  if (msg?.phase !== "answer" || msg.modelId !== "ok-b") wrong.push(`messaggio ${msg?.phase}/${msg?.modelId}`);
+  const done = doneEvent(t.events);
+  if (done?.status !== "done" || "title" in done) wrong.push(`done ${JSON.stringify(done)}`);
+  if (t.state?.status !== "done") wrong.push(`stato ${t.state?.status}`);
+  if (t.state?.verdict !== r.state.verdict || t.state?.title !== r.state.title) wrong.push("verdetto o titolo del turno 0 cambiati");
+  const m1 = turnMsgs(t.state, 1);
+  const user = m1.find((m) => m.model_id === "_user");
+  if (user?.phase !== "followup" || user.content !== NEWQ) wrong.push("messaggio _user mancante");
+  let meta = null;
+  try { meta = JSON.parse(m1.find((m) => m.model_id === "_meta" && m.phase === "turn")?.content ?? "null"); } catch { /* sotto */ }
+  if (meta?.mode !== "quick" || meta.judge !== "ok-b" || meta.webSearch !== false) wrong.push(`_meta del turno ${JSON.stringify(meta)}`);
+  if (!m1.some((m) => m.model_id === "ok-b" && m.phase === "answer" && m.content)) wrong.push("risposta non salvata nel turno 1");
+  if (turnMsgs(t.state, 0).length + m1.length !== t.state.messages.length) wrong.push("messaggi con turn diverso da 0/1");
+  const p = (await promptsOf("conv-quick")).filter((x) => x.phase === "answer");
+  if (p.length !== 1) wrong.push(`${p.length} prompt di risposta rapida`);
+  else {
+    const u = p[0].user;
+    const at = (s) => u.indexOf(s);
+    const keys = ["CONVERSAZIONE FINORA", QUESTION("conv-quick"), "FINE-CONV-ALL", r.state.verdict.slice(0, 200), `NUOVA DOMANDA:\n${NEWQ}`];
+    const missing = keys.filter((k) => at(k) < 0);
+    if (missing.length) wrong.push(`prompt senza: ${missing.map((k) => k.slice(0, 30)).join(" | ")}`);
+    else if (at(r.state.verdict.slice(0, 200)) > at("NUOVA DOMANDA")) wrong.push("verdetto dopo la nuova domanda");
+    if (at("FINE-TURNO-ALL") < at("NUOVA DOMANDA")) wrong.push("allegato del turno assente o prima della nuova domanda");
+    if (/giudice/i.test(p[0].system)) wrong.push("il risponditore riceve il prompt del giudice");
+  }
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, "turno 1: eventi marcati, cronologia del turno, verdetto/titolo invariati, contesto completo nel prompt", secs()];
+};
+
+// Risponditore bloccato: dopo il tempo massimo risponde una riserva della catena, e lo si dice.
+SCENARIOS.aj = async function aj() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-hang");
+  const t = await turnOf(r.id, { question: FQ("conv-hang", "E con i bagagli?"), responder: "hang" }, 240_000);
+  if (t.post.status !== 201) return [false, `POST followups → ${t.post.status}`, secs()];
+  if (t.timedOut) return [false, "nessun done entro 240 s", secs()];
+  if (t.state?.status !== "done") return [false, `stato ${t.state?.status} (${doneEvent(t.events)?.error})`, secs()];
+  const err = t.events.find((e) => e.type === "error" && e.modelId === "hang");
+  const msg = t.events.find((e) => e.type === "message" && e.phase === "answer");
+  if (!err) return [false, "nessun errore per il risponditore bloccato", secs()];
+  if (!msg || msg.modelId === "hang" || !msg.text.startsWith("> Risposta di riserva")) return [false, `risposta: ${msg?.modelId} ${msg?.text.slice(0, 40)}`, secs()];
+  return [true, `riserva ${msg.modelId} dopo "${err.error}"`, secs()];
+};
+
+// Domanda di seguito mentre il dibattito o un turno sono in corso: 409, nessun turno in più.
+SCENARIOS.ak = async function ak() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const c = await api("POST", "/api/debates", { body: { question: QUESTION("conv-409"), models: ["slow", "ok-a"], rounds: 0, judge: "ok-a", claudeModel: "sonnet" } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  const id = c.body.id;
+  const body = { question: FQ("conv-409", "E poi?"), responder: "ok-a", claudeModel: "sonnet" };
+  const a = await api("POST", followupPath(id), { body });
+  if (a.status !== 409) return [false, `durante il dibattito → ${a.status}`, secs()];
+  const d = await followEvents(id, 60_000);
+  if (doneEvent(d.events)?.status !== "done") return [false, "dibattito di partenza non concluso", secs()];
+  await finalState(id);
+  const t1 = await api("POST", followupPath(id), { body: { ...body, responder: "slow" } });
+  if (t1.status !== 201) return [false, `primo turno → ${t1.status}`, secs()];
+  const b = await api("POST", followupPath(id), { body });
+  const b2 = await api("POST", followupPath(id), { body: { ...body, mode: "council", models: ["ok-a", "ok-b"], rounds: 0, judge: "ok-a" } });
+  if (b.status !== 409 || b2.status !== 409) return [false, `durante il turno → ${b.status}/${b2.status}`, secs()];
+  const e = await followEvents(id, 60_000);
+  const st = await finalState(id);
+  if (doneEvent(e.events)?.status !== "done" || st.status !== "done") return [false, `turno lento: ${st.status}`, secs()];
+  // Cinque richieste insieme: un solo turno nuovo, le altre 409.
+  // Risponditore lento: il turno resta in corso mentre arrivano le altre.
+  const many = await Promise.all(Array.from({ length: 5 }, () => api("POST", followupPath(id), { body: { ...body, responder: "slow" } })));
+  const codes = many.map((x) => x.status).sort().join(",");
+  if (codes !== "201,409,409,409,409") return [false, `richieste concorrenti → ${codes}`, secs()];
+  await followEvents(id, 30_000);
+  const st2 = await finalState(id);
+  const users = st2.messages.filter((m) => m.model_id === "_user").length;
+  if (users !== 2) return [false, `${users} domande di seguito salvate (attese 2)`, secs()];
+  return [true, "409 durante dibattito e turno (quick e council); 5 richieste insieme → 1 turno", secs()];
+};
+
+SCENARIOS.al = async function al() {
+  const started = Date.now();
+  const r = await api("POST", followupPath(987654321), { body: { question: FQ("conv-404", "x"), claudeModel: "sonnet" } });
+  const secs = (Date.now() - started) / 1000;
+  if (r.status !== 404) return [false, `id inesistente → ${r.status}`, secs];
+  return [true, "id inesistente → 404", secs];
+};
+
+// Richieste non valide: 400/413/415, mai 500, nessun turno creato. Turno 0 senza risposte: 400.
+SCENARIOS.am = async function am() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-bad");
+  const base = { question: FQ("conv-bad", "E poi?"), claudeModel: "sonnet" };
+  const a = (text, extra = {}) => ({ name: "a.txt", kind: "text", text, ...extra });
+  const council = { mode: "council", models: ["ok-a", "ok-b"], rounds: 1, judge: "ok-a" };
+  const cases = [
+    ["mode sconosciuto", { mode: "fast" }, 400],
+    ["mode numero", { mode: 1 }, 400],
+    ["domanda vuota", { question: "   " }, 400],
+    ["domanda di 20.001 caratteri", { question: "x".repeat(20_001) }, 400],
+    ["responder inesistente", { responder: "nessuno" }, 400],
+    ["responder numero", { responder: 42 }, 400],
+    ["claudeModel sbagliato", { claudeModel: "gpt" }, 400],
+    ["council con 1 modello", { ...council, models: ["ok-a"] }, 400],
+    ["council models stringa", { ...council, models: "ok-a" }, 400],
+    ["council 11 modelli", { ...council, models: MODELS.slice(0, 11) }, 400],
+    ["council rounds 5", { ...council, rounds: 5 }, 400],
+    ["council giudice inesistente", { ...council, judge: "nessuno" }, 400],
+    ["webSearch stringa", { webSearch: "yes" }, 400],
+    ["6 allegati", { attachments: Array(6).fill(a("x")) }, 400],
+    ["allegato di 40.001 caratteri", { attachments: [a("x".repeat(40_001))] }, 400],
+    ["kind sconosciuto", { attachments: [a("x", { kind: "exe" })] }, 400],
+    ["corpo > 400.000 caratteri", { attachments: [a("x".repeat(410_000))] }, 413],
+  ];
+  const wrong = [];
+  for (const [name, extra, want] of cases) {
+    const x = await api("POST", followupPath(r.id), { body: { ...base, ...extra } }).catch((e) => ({ status: `errore ${e.message}` }));
+    if (x.status !== want) wrong.push(`${name}: atteso ${want}, avuto ${x.status}`);
+  }
+  const raw = [["corpo elenco", "[]", 400], ["JSON rotto", "{", 400], ["corpo null", "null", 400]];
+  for (const [name, body, want] of raw) {
+    const x = await api("POST", followupPath(r.id), { body, raw: true });
+    if (x.status !== want) wrong.push(`${name}: atteso ${want}, avuto ${x.status}`);
+  }
+  const ct = await api("POST", followupPath(r.id), { body: base, headers: { "Content-Type": "text/plain" } });
+  if (ct.status !== 415) wrong.push(`text/plain → ${ct.status}`);
+  // Dibattito fallito senza nessuna risposta: non c'è niente da continuare.
+  const f = await debate("conv-bad-empty", ["crash500", "empty"], 0, "ok-a", 60_000);
+  if (f.state?.status !== "failed") wrong.push(`dibattito vuoto: stato ${f.state?.status}`);
+  const fx = await api("POST", followupPath(f.id), { body: base });
+  if (fx.status !== 400) wrong.push(`turno 0 senza risposte → ${fx.status}`);
+  for (const id of [r.id, f.id]) {
+    const st = (await api("GET", `/api/debates/${id}`)).body;
+    if (st?.messages?.some((m) => m.turn > 0)) wrong.push(`dibattito ${id}: turno creato da una richiesta non valida`);
+    if (st?.status === "running") wrong.push(`dibattito ${id} rimasto running`);
+  }
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, `${cases.length + raw.length + 2} richieste non valide respinte (400/413/415), nessun turno creato`, secs()];
+};
+
+// Turno "council": fasi complete marcate turn 1, verdetto del turno nel done, verdetto e titolo della
+// discussione invariati; contesto completo in initial/verdict, richiamo breve nei round. Poi un turno
+// rapido vede il verdetto del consiglio del turno 1.
+SCENARIOS.an = async function an() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-council");
+  const NEWQ = FQ("conv-council", "E per Napoli?");
+  const t = await turnOf(r.id, { question: NEWQ, mode: "council", models: ["ok-a", "ok-b"], rounds: 1, judge: "ok-b" }, 120_000);
+  if (t.post.status !== 201 || t.turn !== 1) return [false, `POST followups → ${t.post.status} ${t.post.text.slice(0, 100)}`, secs()];
+  const wrong = [];
+  if (t.events[0]?.type !== "turn" || t.events[0].mode !== "council") wrong.push("primo evento non turn/council");
+  if (t.events.some((e) => e.turn !== 1)) wrong.push("eventi senza turn: 1");
+  const start = t.events.find((e) => e.type === "start");
+  if (start?.participants?.length !== 2) wrong.push("evento start mancante");
+  for (const ph of ["initial", "critique", "verdict"]) if (phaseEvent(t.events, ph) < 0) wrong.push(`fase ${ph} mancante`);
+  const done = doneEvent(t.events);
+  if (done?.status !== "done" || !done.verdict || "title" in done) wrong.push(`done ${JSON.stringify(done)?.slice(0, 80)}`);
+  if (t.state?.verdict !== r.state.verdict || t.state?.title !== r.state.title) wrong.push("verdetto o titolo del turno 0 cambiati");
+  const m1 = turnMsgs(t.state, 1);
+  for (const [id, ph] of [["ok-a", "initial"], ["ok-b", "initial"], ["ok-a", "critique"], ["judge:ok-b", "verdict"]]) {
+    if (!m1.some((m) => m.model_id === id && m.phase === ph && m.content)) wrong.push(`${id}/${ph} non nel turno 1`);
+  }
+  const pr = (await promptsOf("conv-council")).filter((p) => p.user.includes(NEWQ));
+  const by = (ph) => pr.filter((p) => p.phase === ph);
+  if (!by("initial").length || by("initial").some((p) => !p.user.includes("CONVERSAZIONE FINORA") || !p.user.includes(r.state.verdict.slice(0, 200)))) wrong.push("initial senza conversazione");
+  if (!by("critique").length || by("critique").some((p) => p.user.includes("CONVERSAZIONE FINORA") || !p.user.includes("CONTESTO: domanda successiva"))) wrong.push("critique senza richiamo breve");
+  if (!by("verdict").length || by("verdict").some((p) => !p.user.includes("CONVERSAZIONE FINORA") || p.user.includes("TITOLO:"))) wrong.push("verdetto del turno senza conversazione o con TITOLO");
+  const t2 = await turnOf(r.id, { question: FQ("conv-council", "Riassumi"), responder: "ok-a" }, 60_000);
+  if (t2.turn !== 2 || t2.state?.status !== "done") wrong.push(`turno 2: ${t2.post.status} ${t2.state?.status}`);
+  const q2 = (await promptsOf("conv-council")).find((p) => p.phase === "answer");
+  if (!q2?.user.includes("### Verdetto del consiglio 1") || !q2.user.includes(done?.verdict?.slice(0, 100) ?? "∅")) wrong.push("il turno rapido non vede il verdetto del turno 1");
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, "turno council completo (turn 1, verdetto nel done), contesto giusto per fase, turno 2 lo vede", secs()];
+};
+
+// Annullamento durante un turno; chi si ricollega a /events riceve solo il turno in corso; poi un turno
+// nuovo è ammesso.
+SCENARIOS.ao = async function ao() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-cancel");
+  const t1 = await turnOf(r.id, { question: FQ("conv-cancel", "Primo seguito"), responder: "ok-a" }, 60_000);
+  if (t1.state?.status !== "done") return [false, `turno 1: ${t1.state?.status}`, secs()];
+  const p = await api("POST", followupPath(r.id), { body: { question: FQ("conv-cancel", "Secondo seguito"), responder: "hang", claudeModel: "sonnet" } });
+  if (p.status !== 201 || p.body.turn !== 2) return [false, `turno 2 → ${p.status} ${p.text.slice(0, 60)}`, secs()];
+  await new Promise((res) => setTimeout(res, 800));
+  const follow = followEvents(r.id, 20_000);
+  await new Promise((res) => setTimeout(res, 700));
+  const live = (await api("GET", `/api/debates/${r.id}`)).body;
+  if (live?.status !== "running" || !live.live) return [false, `durante il turno: ${live?.status}, live ${live?.live}`, secs()];
+  const tCancel = Date.now();
+  const c = await api("POST", `/api/debates/${r.id}/cancel`, { body: {} });
+  if (c.status !== 200) return [false, `cancel → ${c.status}`, secs()];
+  const ev = await follow;
+  const after = (Date.now() - tCancel) / 1000;
+  const st = await finalState(r.id);
+  const wrong = [];
+  if (ev.events[0]?.type !== "turn" || ev.events[0].turn !== 2) wrong.push(`ricollegato: primo evento ${JSON.stringify(ev.events[0])?.slice(0, 60)}`);
+  if (ev.events.some((e) => e.turn !== 2)) wrong.push("eventi di un altro turno nel flusso");
+  if (doneEvent(ev.events)?.status !== "cancelled") wrong.push(`done ${doneEvent(ev.events)?.status}`);
+  if (after > 3) wrong.push(`annullato dopo ${after.toFixed(1)} s`);
+  if (st.status !== "cancelled") wrong.push(`stato ${st.status}`);
+  if (st.verdict !== r.state.verdict) wrong.push("verdetto cambiato");
+  if (turnMsgs(st, 2).some((m) => m.error && m.model_id === "hang")) wrong.push("annullamento registrato come errore");
+  const t3 = await turnOf(r.id, { question: FQ("conv-cancel", "Terzo seguito"), responder: "ok-a" }, 60_000);
+  if (t3.turn !== 3 || t3.state?.status !== "done") wrong.push(`turno dopo l'annullamento: ${t3.post.status} turno ${t3.turn} ${t3.state?.status}`);
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, `cancelled ${after.toFixed(1)} s dopo la richiesta, flusso solo del turno 2, turno 3 ammesso`, secs()];
+};
+
+// Dieci turni: nel prompt del decimo solo gli ultimi 6 scambi hanno la risposta, i più vecchi solo la domanda.
+SCENARIOS.ap = async function ap() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-many");
+  const q = (k) => FQ("conv-many", `Q-${String(k).padStart(2, "0")} come cambia?`);
+  for (let k = 1; k <= 10; k++) {
+    const t = await turnOf(r.id, { question: q(k), responder: k % 2 ? "ok-a" : "ok-b" }, 60_000);
+    if (t.turn !== k || t.state?.status !== "done") return [false, `turno ${k}: ${t.post.status} turno ${t.turn} ${t.state?.status}`, secs()];
+  }
+  const last = (await promptsOf("conv-many")).find((p) => p.phase === "answer" && p.user.includes(`NUOVA DOMANDA:\n${q(10)}`));
+  if (!last) return [false, "prompt del turno 10 non trovato", secs()];
+  const u = last.user;
+  const wrong = [];
+  if (!u.includes(QUESTION("conv-many")) || !u.includes(r.state.verdict.slice(0, 200))) wrong.push("domanda originale o verdetto mancanti");
+  for (let k = 1; k <= 9; k++) {
+    if (!u.includes(q(k))) wrong.push(`domanda ${k} mancante`);
+    const eco = u.includes(`ECO[${q(k)}]`);
+    if (k >= 4 && !eco) wrong.push(`risposta ${k} mancante`);
+    if (k < 4 && eco) wrong.push(`risposta ${k} presente (doveva restare solo la domanda)`);
+  }
+  const st = (await api("GET", `/api/debates/${r.id}`)).body;
+  const turns = st.messages.map((m) => m.turn ?? 0);
+  if (turns.some((x, i) => i && x < turns[i - 1])) wrong.push("messaggi non ordinati per turno");
+  if (st.messages.filter((m) => m.model_id === "_user").length !== 10) wrong.push("domande di seguito salvate ≠ 10");
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, `10 turni; nel decimo prompt ${u.length} caratteri, risposte solo per i turni 4–9`, secs()];
+};
+
+// Eliminazione della discussione durante un turno: il flusso si chiude, nessuna riga orfana.
+SCENARIOS.aq = async function aq() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-del");
+  const p = await api("POST", followupPath(r.id), { body: { question: FQ("conv-del", "E poi?"), responder: "hang", claudeModel: "sonnet",
+    attachments: [{ name: "x.txt", kind: "text", text: "testo da eliminare" }] } });
+  if (p.status !== 201) return [false, `POST followups → ${p.status}`, secs()];
+  const follow = followEvents(r.id, 10_000);
+  await new Promise((res) => setTimeout(res, 1000));
+  const d = await api("DELETE", `/api/debates/${r.id}`);
+  if (d.status !== 200) return [false, `DELETE → ${d.status}`, secs()];
+  const ev = await follow;
+  if (ev.timedOut) return [false, "flusso ancora aperto 10 s dopo l'eliminazione", secs()];
+  await new Promise((res) => setTimeout(res, 500));
+  const g = await api("GET", `/api/debates/${r.id}`);
+  const db = new DatabaseSync(join(dataDir, "data", "council.db"), { readOnly: true });
+  const orphans = db.prepare("SELECT (SELECT COUNT(*) FROM messages WHERE debate_id = ?) + (SELECT COUNT(*) FROM attachments WHERE debate_id = ?) AS n").get(r.id, r.id).n;
+  db.close();
+  if (g.status !== 404) return [false, `GET dopo l'eliminazione → ${g.status}`, secs()];
+  if (orphans) return [false, `${orphans} righe orfane`, secs()];
+  const again = await api("POST", followupPath(r.id), { body: { question: FQ("conv-del", "x"), claudeModel: "sonnet" } });
+  if (again.status !== 404) return [false, `domanda di seguito dopo l'eliminazione → ${again.status}`, secs()];
+  return [true, `eliminata durante il turno: flusso chiuso (${doneEvent(ev.events)?.status ?? "senza done"}), nessuna riga orfana`, secs()];
+};
+
+// Motore ucciso durante un turno: al riavvio la discussione è interrupted, poi un turno nuovo è ammesso.
+SCENARIOS.ar = async function ar() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const dir = await mkdtemp(join(tmpdir(), "council-chaos-turn-"));
+  extraDirs.push(dir);
+  const cfgPath = join(dir, "models.json");
+  const mem = (id, model) => ({ id, label: id, kind: "openai", provider: "chaos", model, family: id, default: false });
+  await writeFile(cfgPath, JSON.stringify({
+    providers: { chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" } },
+    judge: { id: "j", label: "Giudice", kind: "openai", provider: "chaos", model: "ok-a" },
+    models: [mem("oka", "ok-a"), mem("okb", "ok-b"), mem("bloccato", "hang")],
+  }));
+  const boot = async () => {
+    const tok = randomBytes(32).toString("hex");
+    const e = await startProcess(process.execPath, ["--disable-warning=ExperimentalWarning", "src/server.ts"],
+      cleanEnv({ COUNCIL_DATA: dir, COUNCIL_MODELS: cfgPath }), "COUNCIL_PORT", JSON.stringify({ token: tok, keys: { CHAOS_KEY } }));
+    extraProcs.push(e.proc);
+    e.proc.removeAllListeners("exit");
+    e.proc.on("exit", (code) => { e.proc.exited = code ?? "signal"; });
+    return { ...e, h: authed(tok) };
+  };
+  const waitState = async (e, id) => {
+    let st;
+    for (let i = 0; i < 100; i++) {
+      st = (await api("GET", `/api/debates/${id}`, { port: e.port, headers: e.h })).body;
+      if (st?.status && st.status !== "running") break;
+      await new Promise((res) => setTimeout(res, 300));
+    }
+    return st;
+  };
+  const e1 = await boot();
+  const c = await api("POST", "/api/debates", { port: e1.port, headers: e1.h,
+    body: { question: QUESTION("conv-restart"), models: ["oka", "okb"], rounds: 0, judge: "oka", claudeModel: "sonnet" } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  const id = c.body.id;
+  if ((await waitState(e1, id))?.status !== "done") return [false, "dibattito di partenza non concluso", secs()];
+  const f1 = await api("POST", followupPath(id), { port: e1.port, headers: e1.h, body: { question: FQ("conv-restart", "E poi?"), responder: "bloccato", claudeModel: "sonnet" } });
+  if (f1.status !== 201) return [false, `turno 1 → ${f1.status}`, secs()];
+  await new Promise((res) => setTimeout(res, 1000));
+  const before = (await api("GET", `/api/debates/${id}`, { port: e1.port, headers: e1.h })).body;
+  if (before?.status !== "running") return [false, `prima del crash stato "${before?.status}"`, secs()];
+  const gone = new Promise((res) => e1.proc.once("exit", res));
+  e1.proc.kill("SIGKILL");
+  await gone;
+  const e2 = await boot();
+  const d = (await api("GET", `/api/debates/${id}`, { port: e2.port, headers: e2.h })).body;
+  const wrong = [];
+  if (d?.status !== "interrupted" || d.live) wrong.push(`dopo il riavvio: ${d?.status}, live ${d?.live}`);
+  if (d?.verdict == null) wrong.push("verdetto del turno 0 perso");
+  const ev = await api("GET", `/api/debates/${id}/events`, { port: e2.port, headers: e2.h });
+  if (ev.status !== 404) wrong.push(`eventi → ${ev.status}`);
+  const f2 = await api("POST", followupPath(id), { port: e2.port, headers: e2.h, body: { question: FQ("conv-restart", "Riprendiamo"), responder: "oka", claudeModel: "sonnet" } });
+  if (f2.status !== 201 || f2.body.turn !== 2) wrong.push(`turno dopo il riavvio → ${f2.status} ${f2.text.slice(0, 60)}`);
+  else {
+    const st = await waitState(e2, id);
+    if (st?.status !== "done" || !turnMsgs(st, 2).some((m) => m.phase === "answer" && m.content)) wrong.push(`turno 2: ${st?.status}`);
+  }
+  e2.proc.kill("SIGTERM");
+  if (wrong.length) return [false, wrong.join("; "), secs()];
+  return [true, "SIGKILL durante il turno → interrupted, non live, eventi 404; turno 2 ammesso e concluso", secs()];
+};
+
+// La ricerca nella cronologia trova le domande di seguito (senza maiuscole né accenti) e la lista
+// restituisce updated_at aggiornato dal turno.
+SCENARIOS.as = async function as() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-search");
+  const t = await turnOf(r.id, { question: FQ("conv-search", "E passando da Zanzibàr-7781?"), responder: "ok-a" }, 60_000);
+  if (t.state?.status !== "done") return [false, `turno: ${t.post.status} ${t.state?.status}`, secs()];
+  const l = (await api("GET", "/api/debates?q=ZANZIBAR-7781")).body ?? [];
+  const row = l.find((x) => x.id === r.id);
+  if (!row) return [false, `domanda di seguito non trovata (${l.length} risultati)`, secs()];
+  if (l.length !== 1) return [false, `${l.length} risultati per un termine unico`, secs()];
+  if (!row.updated_at || row.updated_at < row.created_at) return [false, `updated_at ${row.updated_at} (created_at ${row.created_at})`, secs()];
+  const all = (await api("GET", "/api/debates")).body ?? [];
+  const sorted = all.every((x, i) => !i || all[i - 1].updated_at > x.updated_at || (all[i - 1].updated_at === x.updated_at && all[i - 1].id > x.id));
+  if (!sorted) return [false, "lista non ordinata per ultima attività", secs()];
+  return [true, "trovata con \"ZANZIBAR-7781\" (domanda di seguito con accento), updated_at presente, lista per ultima attività", secs()];
+};
+
+
+// Dibattito annullato durante il giudice (risposte sì, verdetto no): il seguito è ammesso e il contesto
+// porta le ultime posizioni dei membri al posto del verdetto.
+SCENARIOS.at = async function at() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  let id;
+  const p = debate("conv-noverdict", ["ok-a", "ok-b"], 0, "hang", 30_000, { onStart: (x) => (id = x) });
+  await new Promise((res) => setTimeout(res, 1500));
+  await api("POST", `/api/debates/${id}/cancel`, { body: {} });
+  const r = await p;
+  if (r.state?.status !== "cancelled" || r.state.verdict) return [false, `partenza: ${r.state?.status}, verdetto ${!!r.state?.verdict}`, secs()];
+  const t = await turnOf(id, { question: FQ("conv-noverdict", "Allora?"), responder: "ok-a" }, 60_000);
+  if (t.post.status !== 201 || t.state?.status !== "done") return [false, `seguito → ${t.post.status} ${t.state?.status}`, secs()];
+  const u = (await promptsOf("conv-noverdict")).find((x) => x.phase === "answer")?.user ?? "";
+  if (!u.includes("non ha emesso un verdetto") || !u.includes("### Posizione 2")) return [false, "contesto senza le posizioni dei membri", secs()];
+  if (t.state.verdict) return [false, "il turno ha scritto il verdetto della discussione", secs()];
+  return [true, "turno 0 annullato senza verdetto: seguito ammesso, contesto con le 2 posizioni", secs()];
+};
+
+// Turno lungo oltre i 60 s di pulizia del turno precedente: la voce in corso non deve sparire
+// (live, /events e annullamento funzionano ancora).
+SCENARIOS.au = async function au() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-timer");
+  const p = await api("POST", followupPath(r.id), { body: { question: FQ("conv-timer", "E poi?"), responder: "hang", claudeModel: "sonnet" } });
+  if (p.status !== 201) return [false, `POST followups → ${p.status}`, secs()];
+  await new Promise((res) => setTimeout(res, 63_000));
+  const st = (await api("GET", `/api/debates/${r.id}`)).body;
+  if (!st?.live) return [false, `dopo 63 s: stato ${st?.status}, live ${st?.live} (voce del turno tolta dal timer del turno 0)`, secs()];
+  const follow = followEvents(r.id, 10_000);
+  await new Promise((res) => setTimeout(res, 300));
+  await api("POST", `/api/debates/${r.id}/cancel`, { body: {} });
+  const ev = await follow;
+  if (ev.events[0]?.type !== "turn" || doneEvent(ev.events)?.status !== "cancelled") return [false, `flusso: ${ev.events.map((e) => e.type).join(",")}`, secs()];
+  return [true, "dopo 63 s il turno è ancora live, flusso e annullamento funzionano", secs()];
+};
+
+// Ricerca sul web in una risposta rapida: fase research prima di answer, ricercatore con il richiamo
+// alla domanda originale, dossier dopo la nuova domanda; nel turno dopo è nella conversazione.
+SCENARIOS.av = async function av() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await baseDebate("conv-web");
+  const t = await turnOf(r.id, { question: FQ("conv-web", "Prezzi aggiornati?"), responder: "ok-a", webSearch: true }, 60_000);
+  if (t.state?.status !== "done") return [false, `turno 1: ${t.post.status} ${t.state?.status}`, secs()];
+  const wrong = [];
+  const iR = phaseEvent(t.events, "research"), iA = phaseEvent(t.events, "answer");
+  if (iR < 0 || iA < 0 || iR > iA) wrong.push(`fasi research ${iR}, answer ${iA}`);
+  if (!turnMsgs(t.state, 1).some((m) => m.phase === "research" && m.content)) wrong.push("dossier non salvato nel turno 1");
+  const pr = await promptsOf("conv-web");
+  const res = pr.find((x) => x.phase === "research");
+  if (!res?.user.includes("Domanda successiva in una discussione partita da")) wrong.push("ricercatore senza richiamo alla domanda originale");
+  const a1 = pr.find((x) => x.phase === "answer");
+  if (!a1 || a1.user.indexOf(DOSSIER_MARK) < a1.user.indexOf("NUOVA DOMANDA")) wrong.push("dossier assente dal prompt del turno");
+  const t2 = await turnOf(r.id, { question: FQ("conv-web", "E quindi?"), responder: "ok-b" }, 60_000);
+  const a2 = (await promptsOf("conv-web")).filter((x) => x.phase === "answer").at(-1);
+  if (t2.state?.status !== "done" || !a2?.user.includes("Risultati della ricerca sul web") || a2.user.indexOf(DOSSIER_MARK) > a2.user.indexOf("NUOVA DOMANDA")) wrong.push("dossier del turno 1 non nella conversazione del turno 2");
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, "ricerca nel turno: research → answer, dossier nel prompt e nella conversazione dopo", secs()];
+};
+
 const DESCR = {
   y: "riavvio con dibattito running → interrupted", z: "SSE vivo durante il giudice lento",
   r: "corpo spezzato e corpi non-oggetto", s: "eliminazione a dibattito in corso", t: "SSE: ricollegamento a metà",
@@ -1047,6 +1498,14 @@ const DESCR = {
   ad: "allegati nei prompt (e non negli approfondimenti)", ae: "allegati e webSearch non validi",
   af: "allegati al limite + Groq TPM", ag: "annullamento durante la ricerca",
   ah: "ricerca con Claude (CLI finta): strumenti e isolamento",
+  ai: "chat: risposta rapida con il contesto giusto", aj: "chat: risponditore bloccato → riserva",
+  ak: "chat: seguito durante dibattito/turno → 409", al: "chat: seguito su id inesistente → 404",
+  am: "chat: richieste di seguito non valide", an: "chat: turno council completo",
+  ao: "chat: annullamento e ricollegamento durante un turno", ap: "chat: 10 turni, contesto troncato",
+  aq: "chat: eliminazione durante un turno", ar: "chat: riavvio durante un turno → interrupted",
+  as: "chat: ricerca trova le domande di seguito",
+  at: "chat: seguito senza verdetto (posizioni)", au: "chat: turno oltre il timer di pulizia",
+  av: "chat: ricerca sul web in un turno",
 };
 
 // ---------- main ----------

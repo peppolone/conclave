@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection, type ModelDef } from "./config.ts";
-import { createDebate, listDebates, getDebate, deleteDebate, saveAttachments } from "./db.ts";
-import { runDebate, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
+import { createDebate, listDebates, getDebate, deleteDebate, saveAttachments, saveMessage, nextTurn, hasTurnZeroContent, startTurn } from "./db.ts";
+import { runDebate, runQuickAnswer, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
+import { buildConversation } from "./debate/followup.ts";
 import type { Attachment } from "./debate/prompts.ts";
 import { findResearcher } from "./debate/research.ts";
 import { listCatalog, probe } from "./catalog.ts";
@@ -13,10 +14,17 @@ import { killClaudeChildren } from "./adapters/claude-cli.ts";
 
 redactProcessOutput();
 
+/**
+ * Lavoro in corso di una discussione: il dibattito (turno 0) o un turno successivo. Una voce per
+ * discussione: un turno nuovo la sostituisce, quindi chi si collega a /events riceve solo gli
+ * eventi del turno in corso (o dell'ultimo, per 60 s dopo la fine).
+ */
 interface Running {
+  turn: number;
   events: DebateEvent[];
   clients: Set<ServerResponse>;
   controller: AbortController;
+  finished: boolean;
 }
 const running = new Map<number, Running>();
 /** Oltre questo numero il dibattito diventa lento e consuma quote senza aggiungere idee nuove. */
@@ -75,6 +83,19 @@ function send(r: Running, e: DebateEvent) {
   for (const c of r.clients) c.write(line);
 }
 
+/** Registra il lavoro di una discussione e, alla fine, chiude i flussi e lo toglie dopo 60 s. */
+function track(id: number, turn: number, work: (r: Running) => Promise<void>): void {
+  const r: Running = { turn, events: [], clients: new Set(), controller: new AbortController(), finished: false };
+  running.set(id, r);
+  work(r).catch(logError(turn ? `discussione ${id}, turno ${turn}` : `dibattito ${id}`)).finally(() => {
+    r.finished = true;
+    for (const c of r.clients) c.end();
+    // Tiene gli eventi in memoria ancora un po' per chi si ricollega; un turno nuovo nel frattempo
+    // ha già sostituito la voce e non va tolto.
+    setTimeout(() => { if (running.get(id) === r) running.delete(id); }, 60_000);
+  });
+}
+
 // ---- Validazione di POST /api/debates ----
 
 const MAX_QUESTION = 20_000;
@@ -118,31 +139,65 @@ function parseAttachments(raw: unknown): Attachment[] {
   });
 }
 
-/** Controlla e normalizza la richiesta di un nuovo dibattito: ogni problema è un 400, mai un 500. */
-function parseDebateRequest(body: Record<string, unknown>): DebateRequest {
-  if (body.models !== undefined && !Array.isArray(body.models)) throw new BadRequest(400, "models deve essere un elenco");
+// Parti comuni a POST /api/debates e POST /api/debates/:id/followups.
+
+function parseQuestion(body: Record<string, unknown>): string {
   const question = String(body.question ?? "").trim();
   if (question.length > MAX_QUESTION) throw new BadRequest(400, `domanda troppo lunga (max ${fmt(MAX_QUESTION)} caratteri)`);
+  if (!question) throw new BadRequest(400, "domanda vuota");
+  return question;
+}
+
+function parseModels(body: Record<string, unknown>): ModelDef[] {
+  if (body.models !== undefined && !Array.isArray(body.models)) throw new BadRequest(400, "models deve essere un elenco");
   // Id duplicati ignorati: lo stesso modello due volte non aggiunge una voce nuova.
   const ids = [...new Set(((body.models as unknown[] | undefined) ?? []).filter((x): x is string => typeof x === "string"))];
   const models = ids.map(findModel).filter((m): m is ModelDef => !!m && isAvailable(m));
-  if (!question) throw new BadRequest(400, "domanda vuota");
   if (models.length < 2) throw new BadRequest(400, "seleziona almeno 2 modelli disponibili");
   if (models.length > MAX_PARTICIPANTS) throw new BadRequest(400, `massimo ${MAX_PARTICIPANTS} partecipanti`);
+  return models;
+}
 
+function parseRounds(body: Record<string, unknown>): Rounds {
   const rounds = body.rounds ?? DEFAULT_ROUNDS;
   if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0 || rounds > 3) {
     throw new BadRequest(400, "rounds deve essere 0, 1, 2 o 3");
   }
+  return rounds as Rounds;
+}
+
+function parseClaudeModel(body: Record<string, unknown>): string {
   const claudeModel = body.claudeModel ?? config.judge.model;
   if (typeof claudeModel !== "string" || !CLAUDE_MODELS.includes(claudeModel)) {
     throw new BadRequest(400, `claudeModel deve essere uno tra: ${CLAUDE_MODELS.join(", ")}`);
   }
-  const judgeId = body.judge ?? DEFAULT_JUDGE;
-  const judge = judgeId === DEFAULT_JUDGE
+  return claudeModel;
+}
+
+/** Giudice (o risponditore): "claude" = giudice predefinito, altrimenti un modello disponibile. */
+function parseJudge(value: unknown, what: string): ModelDef {
+  const id = value ?? DEFAULT_JUDGE;
+  const judge = id === DEFAULT_JUDGE
     ? config.judge
-    : typeof judgeId === "string" ? config.models.find((m) => m.id === judgeId && isAvailable(m)) : undefined;
-  if (!judge) throw new BadRequest(400, "giudice non valido o non disponibile");
+    : typeof id === "string" ? config.models.find((m) => m.id === id && isAvailable(m)) : undefined;
+  if (!judge) throw new BadRequest(400, `${what} non valido o non disponibile`);
+  return judge;
+}
+
+function parseWebSearch(body: Record<string, unknown>): boolean {
+  if (body.webSearch !== undefined && body.webSearch !== null && typeof body.webSearch !== "boolean") {
+    throw new BadRequest(400, "webSearch deve essere true o false");
+  }
+  return body.webSearch === true;
+}
+
+/** Controlla e normalizza la richiesta di un nuovo dibattito: ogni problema è un 400, mai un 500. */
+function parseDebateRequest(body: Record<string, unknown>): DebateRequest {
+  const models = parseModels(body);
+  const question = parseQuestion(body);
+  const rounds = parseRounds(body);
+  const claudeModel = parseClaudeModel(body);
+  const judge = parseJudge(body.judge, "giudice");
 
   let parentContext: DebateRequest["parentContext"];
   if (body.parentId !== undefined && body.parentId !== null) {
@@ -154,11 +209,25 @@ function parseDebateRequest(body: Record<string, unknown>): DebateRequest {
     parentContext = { id: parent.id, question: parent.question, verdict: parent.verdict };
   }
 
-  if (body.webSearch !== undefined && body.webSearch !== null && typeof body.webSearch !== "boolean") {
-    throw new BadRequest(400, "webSearch deve essere true o false");
-  }
+  const webSearch = parseWebSearch(body);
   const attachments = parseAttachments(body.attachments);
-  return { question, models, rounds: rounds as Rounds, judge, claudeModel, parentContext, webSearch: body.webSearch === true, attachments };
+  return { question, models, rounds, judge, claudeModel, parentContext, webSearch, attachments };
+}
+
+type FollowupRequest =
+  | { mode: "quick"; question: string; responder: ModelDef; claudeModel: string; webSearch: boolean; attachments: Attachment[] }
+  | { mode: "council"; question: string; models: ModelDef[]; rounds: Rounds; judge: ModelDef; claudeModel: string; webSearch: boolean; attachments: Attachment[] };
+
+/** Domanda di seguito: stessi limiti di POST /api/debates. In modo "quick" models/rounds/judge si ignorano. */
+function parseFollowupRequest(body: Record<string, unknown>): FollowupRequest {
+  const mode = body.mode ?? "quick";
+  if (mode !== "quick" && mode !== "council") throw new BadRequest(400, "mode deve essere quick o council");
+  const question = parseQuestion(body);
+  const claudeModel = parseClaudeModel(body);
+  const webSearch = parseWebSearch(body);
+  const attachments = parseAttachments(body.attachments);
+  if (mode === "quick") return { mode, question, responder: parseJudge(body.responder, "risponditore"), claudeModel, webSearch, attachments };
+  return { mode, question, models: parseModels(body), rounds: parseRounds(body), judge: parseJudge(body.judge, "giudice"), claudeModel, webSearch, attachments };
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -170,7 +239,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
   const path = url.pathname;
-  const idMatch = path.match(/^\/api\/debates\/(\d+)(\/events|\/cancel)?$/);
+  const idMatch = path.match(/^\/api\/debates\/(\d+)(\/events|\/cancel|\/followups)?$/);
 
   if (req.method === "GET" && path === "/api/models") {
     const researcher = findResearcher();
@@ -244,17 +313,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       d.parentContext?.id ?? null,
     );
     if (d.attachments.length) saveAttachments(id, d.attachments);
-    const r: Running = { events: [], clients: new Set(), controller: new AbortController() };
-    running.set(id, r);
     const opts = {
       rounds: d.rounds, judge: d.judge, claudeModel: d.claudeModel, parentContext: d.parentContext,
       webSearch: d.webSearch, attachments: d.attachments,
     };
-    runDebate(id, d.question, d.models, opts, (e) => send(r, e), r.controller.signal).catch(logError(`dibattito ${id}`)).finally(() => {
-      for (const c of r.clients) c.end();
-      // Tiene gli eventi in memoria ancora un po' per chi si ricollega.
-      setTimeout(() => running.delete(id), 60_000);
-    });
+    track(id, 0, (r) => runDebate(id, d.question, d.models, opts, (e) => send(r, e), r.controller.signal));
     return json(res, 201, { id });
   }
 
@@ -274,6 +337,50 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       res.on("close", () => clearInterval(ping));
       req.on("close", () => { clearInterval(ping); r.clients.delete(res); });
       return;
+    }
+
+    if (req.method === "POST" && sub === "/followups") {
+      if (!isJsonPost()) return json(res, 415, { error: "serve JSON" });
+      const body = await readObject(req);
+      // Da qui a startTurn nessun await: due richieste insieme non aprono due turni.
+      const debate = getDebate(id);
+      if (!debate) return json(res, 404, { error: "non trovato" });
+      const live = running.get(id);
+      if (debate.status === "running" || (live && !live.finished)) return json(res, 409, { error: "la discussione è ancora in corso" });
+      const f = parseFollowupRequest(body);
+      if (!hasTurnZeroContent(id)) throw new BadRequest(400, "il dibattito originale non ha né un verdetto né una risposta");
+
+      const turn = nextTurn(id);
+      // Prima di segnare la discussione in corso: un errore qui non la lascia bloccata su "running".
+      const conversation = buildConversation(id, debate.question, turn);
+      startTurn(id);
+      const save = (model_id: string, phase: string, content: string) => saveMessage(id, { model_id, phase, content, error: null, ms: null, turn });
+      save("_user", "followup", f.question);
+      save("_meta", "turn", JSON.stringify(f.mode === "quick"
+        ? { mode: f.mode, rounds: 0, judge: f.responder.id, webSearch: f.webSearch }
+        : { mode: f.mode, rounds: f.rounds, judge: f.judge.id, webSearch: f.webSearch }));
+      if (f.attachments.length) saveAttachments(id, f.attachments, turn);
+      track(id, turn, (r) => {
+        const emit = (e: DebateEvent) => send(r, e);
+        emit({ type: "turn", turn, question: f.question, mode: f.mode });
+        if (f.mode === "quick") {
+          if (f.attachments.length) {
+            const meta = f.attachments.map((a) => ({ name: a.name, kind: a.kind, chars: a.text.length }));
+            save("_attachments", "start", JSON.stringify(meta));
+          }
+          // Riserve dopo Claude: i partecipanti del dibattito originale ancora disponibili.
+          const fallbacks = debate.models.map(findModel).filter((m): m is ModelDef => !!m && isAvailable(m));
+          return runQuickAnswer(id, turn, f.question, {
+            responder: f.responder, claudeModel: f.claudeModel, fallbacks, webSearch: f.webSearch,
+            attachments: f.attachments, conversation,
+          }, emit, r.controller.signal);
+        }
+        return runDebate(id, f.question, f.models, {
+          rounds: f.rounds, judge: f.judge, claudeModel: f.claudeModel, webSearch: f.webSearch,
+          attachments: f.attachments, turn, conversation,
+        }, emit, r.controller.signal);
+      });
+      return json(res, 201, { turn });
     }
 
     if (req.method === "POST" && sub === "/cancel") {

@@ -29,11 +29,13 @@ const probes = Object.create(null);  // prove del controllo d'avvio per modello
 const auths = Object.create(null);   // intestazione Authorization ricevuta per modello ("whoami")
 const seenPhase = new Set();         // "ratelimit": prima chiamata per fase già vista
 let hanging = 0;                     // connessioni "hang" ancora aperte
-/** Prompt ricevuti per scenario (solo scenari "web…" e "att…"): /prompts/<scenario>. */
+/** Prompt ricevuti per scenario (solo scenari "web…", "att…" e "conv…"): /prompts/<scenario>. */
 const prompts = Object.create(null);
 
 /** Fase del dibattito ricavata dal prompt. */
 function phaseOf(system, user) {
+  // Risposta rapida a una domanda di seguito (chat continua dopo il verdetto).
+  if (/domanda di seguito/i.test(system)) return "answer";
   if (/giudice/i.test(system)) return "verdict";
   if (user.includes("Round 1")) return "critique";
   if (user.includes("Round 2")) return "revise";
@@ -61,6 +63,10 @@ function okText(model, user) {
 - secondo punto: 3 % in più, anno‑2026`;
   if (user.includes("Round 2")) t += "\n\nCAMBIAMENTI: minori";
   if (user.includes("Round 3")) t += "\n\nFIDUCIA: media";
+  // Turni della chat continua: ripete la prima riga della nuova domanda, così le prove vedono
+  // quali risposte dei turni precedenti finiscono nel contesto.
+  const nq = user.split("NUOVA DOMANDA:\n").at(-1);
+  if (nq !== user) t += `\n\nECO[${nq.split("\n")[0].slice(0, 120)}]`;
   return t;
 }
 
@@ -122,7 +128,7 @@ async function handle(req, res) {
   calls[model] = (calls[model] ?? 0) + 1;
   const searching = Array.isArray(body.tools) && body.tools.some((t) => t?.type === "browser_search");
   const scenario = scenarioOf(user);
-  if (/^(web|att)/.test(scenario)) {
+  if (/^(web|att|conv)/.test(scenario)) {
     (prompts[scenario] ??= []).push({
       model, phase: searching ? "research" : phaseOf(system, user), system, user,
       tools: body.tools ?? null, reasoning_effort: body.reasoning_effort ?? null, max_tokens: body.max_tokens ?? null,
