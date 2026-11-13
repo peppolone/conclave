@@ -65,7 +65,6 @@ struct DebateState: Equatable {
     var displayTitle: String { debateTitle(title, question: question) }
     var rounds: Int?
     var judgeLabel: String?
-    var parentId: Int?
     var status: String        // running, done, failed, cancelled, interrupted
     var statusText: String
     var startedAt: Date?
@@ -77,16 +76,32 @@ struct DebateState: Equatable {
     var judging = false       // il giudice sta scrivendo il verdetto
     var attachments: [AttachmentMeta] = []
     var webSearch = false     // richiesta la ricerca sul web prima del dibattito
+    /// Giudice della discussione (id della voce o "claude") e modello Claude scelto.
+    var judgeId: String?
+    var judgeModel: String?
+    /// Turno: 0 = dibattito originale; 1, 2, … = domande di seguito nella stessa discussione.
+    var turn = 0
+    /// Solo turni ≥ 1: "quick" (risponde un modello) o "council" (il consiglio ridiscute).
+    var mode: String?
+    /// Risposta rapida del turno (modo "quick").
+    var answer: CardState?
+    /// Domande di seguito (turni ≥ 1), in ordine; solo nella discussione principale.
+    var turns: [DebateState] = []
     var isRunning: Bool { status == "running" }
+    var isQuick: Bool { mode == "quick" }
+    /// true se il motore sta lavorando su questa discussione: dibattito originale o domanda di seguito.
+    var busy: Bool { isRunning || turns.contains(where: \.isRunning) }
 
     static func == (a: DebateState, b: DebateState) -> Bool {
         a.id == b.id && a.status == b.status && a.phases == b.phases && a.verdict == b.verdict
             && a.statusText == b.statusText && a.question == b.question && a.title == b.title && a.finishedAt == b.finishedAt
             && a.judging == b.judging && a.attachments == b.attachments && a.webSearch == b.webSearch
+            && a.verdictBy == b.verdictBy && a.turn == b.turn && a.mode == b.mode && a.answer == b.answer && a.turns == b.turns
     }
 }
 
-struct ParentRef: Equatable { let id: Int; let question: String }
+/// Dove vanno gli allegati: composer (nuova discussione) o campo in fondo alla discussione.
+enum DraftTarget { case composer, followup }
 
 // MARK: - Store
 
@@ -112,12 +127,23 @@ final class CouncilStore: ObservableObject {
     @Published var lockedCount = 0          // voci configurate ma senza chiave API
     @Published var checking = false
     @Published var question = ""
-    @Published var parent: ParentRef?
     @Published var startError: String?
     @Published var starting = false
     /// File allegati alla prossima domanda e ultimo avviso sugli allegati (limite, file non supportato).
     @Published var attachments: [AttachmentItem] = []
     @Published var attachmentNotice: String?
+
+    // Domanda di seguito: campo fisso in fondo alla discussione (stile chat di Claude).
+    @Published var followup = ""
+    @Published var followupAttachments: [AttachmentItem] = []
+    @Published var followupNotice: String?
+    @Published var followupError: String?
+    @Published var sendingFollowup = false
+    /// "quick" (risposta rapida di un modello) o "council" (rilancia il consiglio).
+    @Published var followupMode = "quick" { didSet { persist(followupMode, "council.followupMode") } }
+    /// Chi dà la risposta rapida: "" = giudice della discussione, "claude:<modello>" o "voice:<id>".
+    @Published var responder = "" { didSet { persist(responder, "council.responder") } }
+    @Published var followupWebSearch = false { didSet { persist(followupWebSearch, "council.followupWebSearch") } }
 
     // Dibattito mostrato (nil = composer)
     @Published var current: DebateState?
@@ -216,6 +242,9 @@ final class CouncilStore: ObservableObject {
         claudeModel = defaults.string(forKey: "council.claudeModel") ?? d["claudeModel"] as? String ?? "sonnet"
         if !claudeModels.contains(claudeModel) { claudeModel = claudeModels.first ?? "sonnet" }
         webSearch = defaults.bool(forKey: "council.webSearch")
+        followupMode = defaults.string(forKey: "council.followupMode") == "council" ? "council" : "quick"
+        responder = defaults.string(forKey: "council.responder") ?? ""
+        followupWebSearch = defaults.bool(forKey: "council.followupWebSearch")
         syncing = false
         loadedPrefs = true
 
@@ -264,18 +293,26 @@ final class CouncilStore: ObservableObject {
     var questionLength: Int { question.utf16.count }
     var questionTooLong: Bool { questionLength > AttachmentLimits.maxQuestion }
 
-    /// Caratteri di tutti gli allegati pronti.
-    var attachmentsTotal: Int { attachments.reduce(0) { $0 + $1.chars } }
-
     /// Motivo per cui gli allegati impediscono l'avvio (nil se si può partire).
-    var attachmentProblem: String? {
-        if attachments.contains(where: \.loading) { return L("Attendi la lettura degli allegati.") }
-        if attachments.contains(where: { $0.error != nil }) { return L("Togli gli allegati che non si possono leggere.") }
-        if attachmentsTotal > AttachmentLimits.maxTotal {
+    var attachmentProblem: String? { Self.problem(of: attachments) }
+
+    /// Motivo per cui gli allegati indicati impediscono l'invio (nil se vanno bene).
+    static func problem(of items: [AttachmentItem]) -> String? {
+        if items.contains(where: \.loading) { return L("Attendi la lettura degli allegati.") }
+        if items.contains(where: { $0.error != nil }) { return L("Togli gli allegati che non si possono leggere.") }
+        let total = items.reduce(0) { $0 + $1.chars }
+        if total > AttachmentLimits.maxTotal {
             return String(format: L("Allegati troppo lunghi: %@ caratteri in tutto, al massimo %@. Togline qualcuno."),
-                          formatCount(attachmentsTotal), formatCount(AttachmentLimits.maxTotal))
+                          formatCount(total), formatCount(AttachmentLimits.maxTotal))
         }
         return nil
+    }
+
+    /// Allegati pronti nel formato del motore, con i metadati da mostrare.
+    private static func payload(_ items: [AttachmentItem]) -> (body: [[String: String]], meta: [AttachmentMeta]) {
+        let sent = items.compactMap { a in a.text.map { (a, $0) } }
+        return (sent.map { ["name": $0.0.name, "kind": $0.0.kind.rawValue, "text": $0.1] },
+                sent.map { AttachmentMeta(name: $0.0.name, kind: $0.0.kind, chars: $0.0.chars) })
     }
 
     /// Ricerca sul web richiesta e possibile: è ciò che si invia al motore.
@@ -293,54 +330,64 @@ final class CouncilStore: ObservableObject {
 
     // MARK: Allegati
 
+    /// Allegati e avviso del riquadro indicato (composer o campo della domanda di seguito).
+    private func paths(_ t: DraftTarget) -> (items: ReferenceWritableKeyPath<CouncilStore, [AttachmentItem]>,
+                                             notice: ReferenceWritableKeyPath<CouncilStore, String?>) {
+        t == .composer ? (\.attachments, \.attachmentNotice) : (\.followupAttachments, \.followupNotice)
+    }
+
     /// Aggiunge file come allegati e ne legge il testo in background.
-    func addAttachments(_ urls: [URL]) {
-        attachmentNotice = nil
+    func addAttachments(_ urls: [URL], to target: DraftTarget = .composer) {
+        let (items, notice) = paths(target)
+        self[keyPath: notice] = nil
         var skipped: [String] = []
         for url in urls {
-            guard attachments.count < AttachmentLimits.maxFiles else {
-                attachmentNotice = String(format: L("Al massimo %d allegati: gli altri file non sono stati aggiunti."), AttachmentLimits.maxFiles)
+            guard self[keyPath: items].count < AttachmentLimits.maxFiles else {
+                self[keyPath: notice] = String(format: L("Al massimo %d allegati: gli altri file non sono stati aggiunti."), AttachmentLimits.maxFiles)
                 break
             }
             guard let kind = AttachmentReader.kind(of: url) else { skipped.append(url.lastPathComponent); continue }
             let item = AttachmentItem(name: String(url.lastPathComponent.prefix(AttachmentLimits.maxName)), kind: kind)
-            attachments.append(item)
-            load(item.id) { try AttachmentReader.read(url, kind: kind) }
+            self[keyPath: items].append(item)
+            load(item.id, items) { try AttachmentReader.read(url, kind: kind) }
         }
-        if !skipped.isEmpty, attachmentNotice == nil {
-            attachmentNotice = String(format: L("Tipo di file non supportato: %@. Si possono allegare PDF, file di testo e immagini."),
-                                      skipped.joined(separator: ", "))
+        if !skipped.isEmpty, self[keyPath: notice] == nil {
+            self[keyPath: notice] = String(format: L("Tipo di file non supportato: %@. Si possono allegare PDF, file di testo e immagini."),
+                                           skipped.joined(separator: ", "))
         }
     }
 
     /// Immagine incollata dagli appunti: se ne riconosce il testo.
-    func addPastedImage(_ data: Data) {
-        attachmentNotice = nil
-        guard attachments.count < AttachmentLimits.maxFiles else {
-            attachmentNotice = String(format: L("Al massimo %d allegati: gli altri file non sono stati aggiunti."), AttachmentLimits.maxFiles)
+    func addPastedImage(_ data: Data, to target: DraftTarget = .composer) {
+        let (items, notice) = paths(target)
+        self[keyPath: notice] = nil
+        guard self[keyPath: items].count < AttachmentLimits.maxFiles else {
+            self[keyPath: notice] = String(format: L("Al massimo %d allegati: gli altri file non sono stati aggiunti."), AttachmentLimits.maxFiles)
             return
         }
         let item = AttachmentItem(name: L("Immagine incollata"), kind: .image)
-        attachments.append(item)
-        load(item.id) { try AttachmentReader.readImage(data) }
+        self[keyPath: items].append(item)
+        load(item.id, items) { try AttachmentReader.readImage(data) }
     }
 
-    func removeAttachment(_ id: UUID) {
-        attachments.removeAll { $0.id == id }
-        attachmentNotice = nil
+    func removeAttachment(_ id: UUID, from target: DraftTarget = .composer) {
+        let (items, notice) = paths(target)
+        self[keyPath: items].removeAll { $0.id == id }
+        self[keyPath: notice] = nil
     }
 
-    private func load(_ id: UUID, _ read: @escaping @Sendable () throws -> String) {
+    private func load(_ id: UUID, _ items: ReferenceWritableKeyPath<CouncilStore, [AttachmentItem]>,
+                      _ read: @escaping @Sendable () throws -> String) {
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) { Result { try read() } }.value
-            guard let self, let i = self.attachments.firstIndex(where: { $0.id == id }) else { return }
+            guard let self, let i = self[keyPath: items].firstIndex(where: { $0.id == id }) else { return }
             switch result {
             case .success(let text):
                 let cut = AttachmentReader.truncate(text, to: AttachmentLimits.maxChars)
-                self.attachments[i].text = cut
-                self.attachments[i].truncated = cut.utf16.count < text.utf16.count
+                self[keyPath: items][i].text = cut
+                self[keyPath: items][i].truncated = cut.utf16.count < text.utf16.count
             case .failure(let e):
-                self.attachments[i].error = e.localizedDescription
+                self[keyPath: items][i].error = e.localizedDescription
             }
         }
     }
@@ -377,22 +424,22 @@ final class CouncilStore: ObservableObject {
         defer { starting = false }
         var body: [String: Any] = ["question": q, "models": orderedSelection, "rounds": rounds,
                                    "judge": judge, "claudeModel": claudeModel]
-        if let parent { body["parentId"] = parent.id }
-        let sent = attachments.compactMap { a in a.text.map { (a, $0) } }
-        if !sent.isEmpty { body["attachments"] = sent.map { ["name": $0.0.name, "kind": $0.0.kind.rawValue, "text": $0.1] } }
+        let sent = Self.payload(attachments)
+        if !sent.body.isEmpty { body["attachments"] = sent.body }
         let web = webSearchActive
         if web { body["webSearch"] = true }
         do {
             let data = try await request("POST", "/api/debates", body: body)
             guard let id = json(data)["id"] as? Int else { throw URLError(.badServerResponse) }
             question = ""
-            parent = nil
             attachments = []
             attachmentNotice = nil
-            var d = DebateState(id: id, question: q, rounds: rounds, judgeLabel: judgeLabel, parentId: body["parentId"] as? Int,
+            var d = DebateState(id: id, question: q, rounds: rounds, judgeLabel: judgeLabel,
                                 status: "running", statusText: Self.statusText("running"), startedAt: .now)
-            d.attachments = sent.map { AttachmentMeta(name: $0.0.name, kind: $0.0.kind, chars: $0.0.chars) }
+            d.attachments = sent.meta
             d.webSearch = web
+            d.judgeId = judge
+            d.judgeModel = claudeModel
             current = d
             onCurrentChanged?(id)
             onHistoryChanged?()
@@ -420,7 +467,7 @@ final class CouncilStore: ObservableObject {
             } catch {}
             // Flusso finito senza "done" (errore, 404, riavvio): si rilegge lo stato salvato,
             // altrimenti la discussione resterebbe "in corso" per sempre.
-            guard !Task.isCancelled, self.current?.id == id, self.current?.isRunning == true else { return }
+            guard !Task.isCancelled, self.current?.id == id, self.current?.busy == true else { return }
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
             // open() annulla il flusso della discussione mostrata, cioè questo task: lo si
@@ -439,17 +486,23 @@ final class CouncilStore: ObservableObject {
     /// così cronologia, notifica e badge arrivano anche guardando altro.
     private func leaveCurrent() {
         stream?.cancel()
-        if let d = current, d.isRunning { watch(d.id, title: d.displayTitle) }
+        if let d = current, d.busy { watch(d.id, title: d.displayTitle, turn: d.turns.last(where: \.isRunning)?.turn ?? 0) }
     }
 
-    private func watch(_ id: Int, title: String) {
+    /// `turn`: turno in corso da attendere (0 = dibattito originale).
+    private func watch(_ id: Int, title: String, turn: Int = 0) {
         guard watchers[id] == nil, let u = Engine.url(port(), "/api/debates/\(id)/events") else { return }
         watchers[id] = Task { [weak self] in
             var done: [String: Any]?
+            // Il flusso può ripetere gli eventi dei turni già conclusi: conta solo la fine dell'ultimo.
+            var lastTurn = turn
             if let (bytes, _) = try? await URLSession.shared.bytes(for: Engine.request(u, timeout: 3600)) {
                 do {
                     for try await line in bytes.lines {
-                        if let e = Self.event(line), e["type"] as? String == "done" { done = e; break }
+                        guard let e = Self.event(line) else { continue }
+                        let n = e["turn"] as? Int ?? 0
+                        if e["type"] as? String == "turn" { lastTurn = max(lastTurn, n) }
+                        if e["type"] as? String == "done", n >= lastTurn { done = e; break }
                     }
                 } catch {}
             }
@@ -461,10 +514,59 @@ final class CouncilStore: ObservableObject {
     }
 
     /// true se un dibattito è in corso, mostrato o in background.
-    var hasRunning: Bool { current?.isRunning == true || !watchers.isEmpty }
+    var hasRunning: Bool { current?.busy == true || !watchers.isEmpty }
 
     private func apply(_ e: [String: Any], debateId: Int) {
         guard var d = current, d.id == debateId, let type = e["type"] as? String else { return }
+        let n = e["turn"] as? Int ?? 0
+        if type == "turn" {
+            // Inizio di una domanda di seguito: di solito il turno c'è già (aggiunto all'invio).
+            guard n > 0, !d.turns.contains(where: { $0.turn == n }) else { return }
+            d.turns.append(newTurn(d, n: n, question: e["question"] as? String ?? "",
+                                   mode: e["mode"] as? String == "council" ? "council" : "quick"))
+            d.turns.sort { $0.turn < $1.turn }
+            current = d
+            return
+        }
+        if n == 0 {
+            // Eventi ripetuti di un dibattito originale già concluso: niente da aggiornare
+            // (né notifiche doppie).
+            guard d.isRunning else { return }
+            applyEvent(type, e, to: &d)
+            if type == "done" {
+                if let t = e["title"] as? String { d.title = t }
+                if d.status == "done" { onVerdictReady?(d.displayTitle) }
+                onHistoryChanged?()
+            }
+        } else {
+            if !d.turns.contains(where: { $0.turn == n }) {
+                // Evento "turn" perso: il turno si ricostruisce dagli eventi che seguono.
+                d.turns.append(newTurn(d, n: n, question: "", mode: e["phase"] as? String == "answer" ? "quick" : "council"))
+                d.turns.sort { $0.turn < $1.turn }
+            }
+            guard let i = d.turns.firstIndex(where: { $0.turn == n }), d.turns[i].isRunning else { return }
+            applyEvent(type, e, to: &d.turns[i])
+            if type == "done" {
+                if d.turns[i].status == "done" { onVerdictReady?(d.displayTitle) }
+                onHistoryChanged?()
+            }
+        }
+        current = d
+    }
+
+    /// Turno n di una discussione, appena iniziato.
+    private func newTurn(_ d: DebateState, n: Int, question: String, mode: String) -> DebateState {
+        var t = DebateState(id: d.id, question: question, rounds: mode == "council" ? d.rounds : nil,
+                            judgeLabel: mode == "council" ? d.judgeLabel : nil, status: "running",
+                            statusText: mode == "quick" ? L("Risposta in corso…") : Self.statusText("running"), startedAt: .now)
+        t.turn = n
+        t.mode = mode
+        if mode == "council" { t.participants = d.participants }
+        return t
+    }
+
+    /// Applica un evento del flusso al dibattito originale o a un turno di seguito.
+    private func applyEvent(_ type: String, _ e: [String: Any], to d: inout DebateState) {
         switch type {
         case "start":
             for p in e["participants"] as? [[String: Any]] ?? [] {
@@ -477,6 +579,11 @@ final class CouncilStore: ObservableObject {
             let phase = e["phase"] as? String ?? ""
             let note = e["note"] as? String
             if phase == "verdict" { d.statusText = L("Il giudice sta valutando…"); d.judging = true; break }
+            if phase == "answer" {
+                if d.answer == nil { d.answer = CardState(id: "answer", title: L("Risposta rapida")) }
+                d.statusText = L("Risposta in corso…")
+                break
+            }
             if let i = d.phases.firstIndex(where: { $0.id == phase }) {
                 if let note { d.phases[i].note = note }
             } else {
@@ -495,6 +602,14 @@ final class CouncilStore: ObservableObject {
             if phase == "verdict" {
                 d.verdict = text
                 d.verdictBy = judgeName(modelId.replacingOccurrences(of: "judge:", with: ""), in: d)
+            } else if phase == "answer" {
+                setAnswer(&d, modelId: modelId) {
+                    $0.text = text
+                    $0.error = nil
+                    $0.seconds = (e["ms"] as? Double).map { $0 / 1000 }
+                    $0.usedModel = e["model"] as? String
+                    $0.replaced = e["replaced"] as? String
+                }
             } else {
                 upsert(&d, phase: phase, modelId: modelId) {
                     $0.text = text
@@ -510,6 +625,8 @@ final class CouncilStore: ObservableObject {
             let error = e["error"] as? String ?? L("errore")
             if phase == "verdict" {
                 d.statusText = L("Giudice non disponibile, provo un altro modello…")
+            } else if phase == "answer" {
+                setAnswer(&d, modelId: modelId) { $0.error = error }
             } else {
                 upsert(&d, phase: phase, modelId: modelId) {
                     $0.error = error
@@ -521,14 +638,19 @@ final class CouncilStore: ObservableObject {
             d.status = status
             d.judging = false
             d.finishedAt = .now
-            d.statusText = status == "done" ? Self.statusText("done") : (e["error"] as? String ?? status)
-            if let t = e["title"] as? String { d.title = t }
-            if status == "done" { onVerdictReady?(d.displayTitle) }
-            onHistoryChanged?()
+            d.statusText = status == "done" ? Self.statusText("done") : (e["error"] as? String ?? Self.statusText(status))
         default:
             break
         }
-        current = d
+    }
+
+    /// Aggiorna la risposta rapida del turno; il titolo dice chi ha risposto.
+    private func setAnswer(_ d: inout DebateState, modelId: String, _ change: (inout CardState) -> Void) {
+        let id = modelId.replacingOccurrences(of: "judge:", with: "")
+        var card = d.answer ?? CardState(id: "answer", title: L("Risposta rapida"))
+        if !id.isEmpty { card.title = String(format: L("Risposta rapida · %@"), judgeName(id, in: d)) }
+        change(&card)
+        d.answer = card
     }
 
     /// Nome leggibile del giudice: "Claude", oppure il nome della voce.
@@ -586,58 +708,136 @@ final class CouncilStore: ObservableObject {
         guard let data = try? await request("GET", "/api/debates/\(id)"), seq == openSeq else { return }
         let j = json(data)
         let status = j["status"] as? String ?? "done"
+        let live = (j["live"] as? Bool) == true
         let opts = j["options"] as? [String: Any]
         var d = DebateState(id: id, question: j["question"] as? String ?? "", rounds: opts?["rounds"] as? Int,
-                            judgeLabel: nil, parentId: j["parent_id"] as? Int, status: status,
+                            judgeLabel: nil, status: status,
                             statusText: Self.statusText(status), startedAt: Self.date(j["created_at"]),
                             finishedAt: Self.date(j["finished_at"]))
         d.title = j["title"] as? String
         d.webSearch = opts?["webSearch"] as? Bool ?? false
         if let o = opts, let jid = o["judge"] as? String {
+            d.judgeId = jid
+            d.judgeModel = o["claudeModel"] as? String
             d.judgeLabel = jid == "claude" ? "Claude \((o["claudeModel"] as? String ?? "sonnet").capitalized)"
                 : (voices.first { $0.id == jid }?.label ?? jid)
         }
         let messages = j["messages"] as? [[String: Any]] ?? []
-        if let meta = messages.first(where: { ($0["model_id"] as? String) == "_meta" }),
-           let c = (meta["content"] as? String)?.data(using: .utf8),
-           let parts = try? JSONSerialization.jsonObject(with: c) as? [[String: Any]] {
-            for p in parts { if let pid = p["id"] as? String { d.participants[pid] = (p["label"] as? String ?? pid, p["letter"] as? String ?? "") } }
-        }
-        if let att = messages.first(where: { ($0["model_id"] as? String) == "_attachments" }),
-           let c = (att["content"] as? String)?.data(using: .utf8),
-           let list = try? JSONSerialization.jsonObject(with: c) as? [[String: Any]] {
-            d.attachments = list.compactMap { a in
-                guard let name = a["name"] as? String else { return nil }
-                return AttachmentMeta(name: name, kind: AttachmentKind(rawValue: a["kind"] as? String ?? "") ?? .text,
-                                      chars: a["chars"] as? Int ?? 0)
-            }
-        }
-        if (j["live"] as? Bool) == true {
+        // Messaggi per turno: 0 = dibattito originale, poi le domande di seguito.
+        let byTurn = Dictionary(grouping: messages) { $0["turn"] as? Int ?? 0 }
+        let lastTurn = byTurn.keys.max() ?? 0
+        if live && lastTurn == 0 {
+            readMeta(byTurn[0] ?? [], into: &d)
             // Dibattito in corso: lo stream rimanda tutti gli eventi dall'inizio. Se lo si sta già
             // guardando si tiene quello che c'è (niente contenuto svuotato, lo scorrimento resta dov'è).
-            if current?.id != id { current = d }
+            if current?.id != id { switchDraft(to: id); current = d }
             onCurrentChanged?(id)
             listen(id)
             return
         }
+        if live, current?.id == id, current?.turns.last?.turn == lastTurn, current?.turns.last?.isRunning == true {
+            // Domanda di seguito già mostrata dal vivo: si riprende il flusso senza toccare la vista.
+            onCurrentChanged?(id)
+            listen(id)
+            return
+        }
+        if lastTurn > 0 {
+            // Con domande di seguito lo stato della discussione è quello dell'ultimo turno:
+            // il dibattito originale si è concluso (con verdetto) o si era fermato prima.
+            d.status = j["verdict"] as? String != nil ? "done" : "cancelled"
+            d.statusText = Self.statusText(d.status)
+        }
         // Si pubblica una sola volta, a contenuto completo: uno stato intermedio vuoto farebbe
         // tornare in cima la vista del dibattito già aperto (riconnessione, Ricarica).
-        if current?.id != id { current = d }
+        if current?.id != id { switchDraft(to: id); current = d }
         onCurrentChanged?(id)
-        for m in messages {
+        fill(&d, byTurn[0] ?? [])
+        d.verdict = j["verdict"] as? String
+        if lastTurn > 0 {
+            for n in 1...lastTurn {
+                guard let msgs = byTurn[n] else { continue }
+                var t = newTurn(d, n: n, question: "", mode: "quick")
+                t.participants = d.participants
+                t.startedAt = Self.date(msgs.first?["created_at"])
+                t.status = n < lastTurn ? (Self.hasResult(msgs) ? "done" : "failed") : (live ? "running" : status)
+                t.statusText = t.isRunning ? t.statusText : Self.statusText(t.status)
+                // Turno in corso: le risposte le rimanda il flusso, dalla cronologia solo domanda e opzioni.
+                fill(&t, msgs, onlyHeader: t.isRunning)
+                // Senza opzioni salvate il modo si riconosce dalle fasi.
+                if t.answer == nil, t.verdict != nil || t.phases.contains(where: { $0.id != "research" }) {
+                    t.mode = "council"
+                }
+                d.turns.append(t)
+            }
+        }
+        current = d
+        if live { listen(id) }
+    }
+
+    /// true se il turno ha almeno una risposta o un verdetto.
+    private static func hasResult(_ msgs: [[String: Any]]) -> Bool {
+        msgs.contains { m in
+            let mid = m["model_id"] as? String ?? ""
+            return !mid.hasPrefix("_") && (m["content"] as? String).map { !$0.isEmpty } == true
+        }
+    }
+
+    /// Partecipanti, opzioni del turno e allegati dai messaggi tecnici (`_meta`, `_attachments`, `_user`).
+    private func readMeta(_ msgs: [[String: Any]], into d: inout DebateState) {
+        for m in msgs {
+            let mid = m["model_id"] as? String ?? ""
+            let content = m["content"] as? String ?? ""
+            switch mid {
+            case "_user":
+                d.question = content
+            case "_meta":
+                guard let c = content.data(using: .utf8), let v = try? JSONSerialization.jsonObject(with: c) else { continue }
+                if let parts = v as? [[String: Any]] {
+                    for p in parts { if let pid = p["id"] as? String { d.participants[pid] = (p["label"] as? String ?? pid, p["letter"] as? String ?? "") } }
+                } else if let o = v as? [String: Any], d.turn > 0 {
+                    // Opzioni della domanda di seguito: {"mode","rounds","judge","webSearch"}.
+                    d.mode = o["mode"] as? String == "council" ? "council" : "quick"
+                    d.webSearch = o["webSearch"] as? Bool ?? false
+                    if d.mode == "council" {
+                        if d.isRunning { d.statusText = Self.statusText("running") }
+                        if let r = o["rounds"] as? Int { d.rounds = r }
+                        if let jid = o["judge"] as? String {
+                            d.judgeLabel = jid == "claude" ? "Claude" : (voices.first { $0.id == jid }?.label ?? jid)
+                        }
+                    } else {
+                        d.rounds = nil
+                        d.judgeLabel = nil
+                        d.statusText = d.isRunning ? L("Risposta in corso…") : d.statusText
+                    }
+                }
+            case "_attachments":
+                guard let c = content.data(using: .utf8),
+                      let list = try? JSONSerialization.jsonObject(with: c) as? [[String: Any]] else { continue }
+                d.attachments = list.compactMap { a in
+                    guard let name = a["name"] as? String else { return nil }
+                    return AttachmentMeta(name: name, kind: AttachmentKind(rawValue: a["kind"] as? String ?? "") ?? .text,
+                                          chars: a["chars"] as? Int ?? 0)
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    /// Riempie un turno (o il dibattito originale) con i messaggi salvati.
+    private func fill(_ d: inout DebateState, _ msgs: [[String: Any]], onlyHeader: Bool = false) {
+        readMeta(msgs, into: &d)
+        if onlyHeader { return }
+        for m in msgs {
             let mid = m["model_id"] as? String ?? ""
             let phase = m["phase"] as? String ?? ""
-            if mid == "_meta" || mid == "_attachments" { continue }
+            if ["_meta", "_attachments", "_user"].contains(mid) { continue }
             if mid == "_note" {
                 if let i = d.phases.firstIndex(where: { $0.id == phase }) { d.phases[i].note = m["content"] as? String }
                 else { d.phases.append(PhaseState(id: phase, title: Self.phaseTitles[phase] ?? phase, note: m["content"] as? String, cards: [])) }
                 continue
             }
-            if phase == "verdict" {
-                if m["content"] as? String != nil { d.verdictBy = judgeName(mid.replacingOccurrences(of: "judge:", with: ""), in: d) }
-                continue
-            }
-            upsert(&d, phase: phase, modelId: mid) {
+            let change: (inout CardState) -> Void = {
                 $0.text = m["content"] as? String
                 $0.error = m["error"] as? String
                 $0.skipped = ($0.error ?? "").hasPrefix("ha saltato")
@@ -645,23 +845,35 @@ final class CouncilStore: ObservableObject {
                 $0.usedModel = m["model_used"] as? String
                 $0.replaced = m["replaced"] as? String
             }
+            if phase == "verdict" {
+                if let v = m["content"] as? String {
+                    d.verdictBy = judgeName(mid.replacingOccurrences(of: "judge:", with: ""), in: d)
+                    // Il verdetto del dibattito originale arriva da `debates.verdict`.
+                    if d.turn > 0 { d.verdict = v }
+                }
+                continue
+            }
+            if phase == "answer" {
+                setAnswer(&d, modelId: mid, change)
+                continue
+            }
+            upsert(&d, phase: phase, modelId: mid, change)
         }
         d.phases.sort { Self.sortIndex($0.id) < Self.sortIndex($1.id) }
-        d.verdict = j["verdict"] as? String
-        current = d
     }
 
     func newDiscussion() {
         leaveCurrent()
+        switchDraft(to: nil)
         openSeq += 1
         current = nil
-        parent = nil
         startError = nil
         onCurrentChanged?(nil)
     }
 
     func deleted(_ id: Int) {
         watchers.removeValue(forKey: id)?.cancel()
+        drafts[id] = nil
         guard current?.id == id else { return }
         // Niente da seguire in background: la discussione non esiste più.
         stream?.cancel()
@@ -674,12 +886,135 @@ final class CouncilStore: ObservableObject {
         _ = try? await request("POST", "/api/debates/\(id)/cancel")
     }
 
-    /// "Approfondisci": torna al composer con il dibattito corrente come contesto.
-    func deepen() {
-        guard let d = current else { return }
-        let p = ParentRef(id: d.id, question: d.question)
-        newDiscussion()
-        parent = p
+    // MARK: Domanda di seguito (chat continua dopo il verdetto)
+
+    /// Bozze del campo in fondo, per discussione: cambiando discussione non si perdono né si
+    /// mandano alla discussione sbagliata.
+    private var drafts: [Int: (text: String, attachments: [AttachmentItem])] = [:]
+
+    /// Mette da parte la bozza della discussione mostrata e carica quella di `id`.
+    private func switchDraft(to id: Int?) {
+        if let old = current?.id {
+            let ready = followupAttachments.filter { !$0.loading }
+            drafts[old] = followup.isEmpty && ready.isEmpty ? nil : (followup, ready)
+        }
+        let next = id.flatMap { drafts[$0] }
+        followup = next?.text ?? ""
+        followupAttachments = next?.attachments ?? []
+        followupNotice = nil
+        followupError = nil
+    }
+
+    /// Si può continuare la discussione: dibattito originale concluso con un verdetto o almeno una risposta.
+    func canFollowUp(_ d: DebateState) -> Bool {
+        !d.isRunning && (d.verdict != nil || d.phases.contains { p in p.id != "research" && p.cards.contains { $0.text != nil } })
+    }
+
+    var followupLength: Int { followup.utf16.count }
+    var followupTooLong: Bool { followupLength > AttachmentLimits.maxQuestion }
+    var followupAttachmentProblem: String? { Self.problem(of: followupAttachments) }
+    var followupWebSearchActive: Bool { followupWebSearch && webSearchAvailable }
+
+    /// Partecipanti del dibattito originale ancora disponibili, per rilanciare il consiglio.
+    func councilModels(_ d: DebateState) -> [String] {
+        d.participants.keys.sorted { (d.participants[$0]?.letter ?? "") < (d.participants[$1]?.letter ?? "") }
+            .filter { id in voices.contains { $0.id == id } }
+    }
+
+    /// Giudice della discussione, se ancora disponibile; altrimenti Claude.
+    func discussionJudge(_ d: DebateState) -> (id: String, claudeModel: String, label: String) {
+        let jid = d.judgeId ?? judge
+        if jid != "claude", let v = voices.first(where: { $0.id == jid }) { return (v.id, claudeModel, v.label) }
+        let m = jid == "claude" ? (d.judgeModel ?? claudeModel) : claudeModel
+        return ("claude", m, "Claude \(m.capitalized)")
+    }
+
+    /// Chi dà la risposta rapida: scelta dell'utente o, in mancanza, il giudice della discussione.
+    func quickResponder(_ d: DebateState) -> (id: String, claudeModel: String, label: String) {
+        if responder.hasPrefix("claude:") {
+            let m = String(responder.dropFirst(7))
+            if claudeModels.contains(m) { return ("claude", m, "Claude \(m.capitalized)") }
+        } else if responder.hasPrefix("voice:"), let v = voices.first(where: { $0.id == String(responder.dropFirst(6)) }) {
+            return (v.id, claudeModel, v.label)
+        }
+        return discussionJudge(d)
+    }
+
+    /// Motivo per cui non si può inviare la domanda di seguito (nil se si può, o se manca solo il testo).
+    func followupProblem(_ d: DebateState) -> String? {
+        if followupTooLong {
+            return String(format: L("La domanda supera il limite di %@ caratteri: accorciala per inviarla."), formatCount(AttachmentLimits.maxQuestion))
+        }
+        if let p = followupAttachmentProblem { return p }
+        if followupMode == "council" && councilModels(d).count < 2 {
+            return L("Per rilanciare il consiglio servono almeno 2 partecipanti della discussione ancora disponibili.")
+        }
+        return nil
+    }
+
+    var canSendFollowup: Bool {
+        guard let d = current, engineReady, !sendingFollowup, !d.busy, canFollowUp(d), followupProblem(d) == nil else { return false }
+        return !followup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Invia la domanda di seguito: risposta rapida di un modello o nuovo giro del consiglio.
+    func sendFollowup() async {
+        guard canSendFollowup, let d = current else { return }
+        let q = followup.trimmingCharacters(in: .whitespacesAndNewlines)
+        let council = followupMode == "council"
+        sendingFollowup = true
+        followupError = nil
+        defer { sendingFollowup = false }
+        let who = quickResponder(d), judgeOf = discussionJudge(d)
+        let rounds = d.rounds ?? self.rounds
+        var body: [String: Any] = ["question": q, "mode": council ? "council" : "quick"]
+        if council {
+            body["models"] = councilModels(d)
+            body["rounds"] = rounds
+            body["judge"] = judgeOf.id
+            body["claudeModel"] = judgeOf.claudeModel
+        } else {
+            body["responder"] = who.id
+            body["claudeModel"] = who.claudeModel
+        }
+        let sent = Self.payload(followupAttachments)
+        if !sent.body.isEmpty { body["attachments"] = sent.body }
+        let web = followupWebSearchActive
+        if web { body["webSearch"] = true }
+        do {
+            let data = try await request("POST", "/api/debates/\(d.id)/followups", body: body)
+            guard let n = json(data)["turn"] as? Int else { throw URLError(.badServerResponse) }
+            onHistoryChanged?()
+            // Nel frattempo è stata aperta un'altra discussione: la bozza inviata era stata messa da
+            // parte e il campo mostra quella dell'altra; questa si segue in background.
+            guard var cur = current, cur.id == d.id else { drafts[d.id] = nil; watch(d.id, title: d.displayTitle, turn: n); return }
+            followup = ""
+            followupAttachments = []
+            followupNotice = nil
+            if !cur.turns.contains(where: { $0.turn == n }) {
+                var t = newTurn(cur, n: n, question: q, mode: council ? "council" : "quick")
+                t.attachments = sent.meta
+                t.webSearch = web
+                if council {
+                    t.rounds = rounds
+                    t.judgeLabel = judgeOf.label
+                } else {
+                    t.answer = CardState(id: who.id, title: String(format: L("Risposta rapida · %@"), who.label))
+                }
+                cur.turns.append(t)
+                cur.turns.sort { $0.turn < $1.turn }
+                current = cur
+            }
+            listen(d.id)
+        } catch {
+            let e = error as NSError
+            if e.domain == "council", e.code == 409 {
+                followupError = L("La discussione è ancora in corso: attendi che finisca, poi riprova.")
+                if current?.id == d.id { await open(d.id) }
+            } else {
+                followupError = String(format: L("Domanda non inviata: %@"), error.localizedDescription)
+            }
+        }
     }
 
     // MARK: Testi ed esportazione
@@ -735,14 +1070,35 @@ final class CouncilStore: ObservableObject {
         }
         out += ["_\(meta(d))_", ""]
         if let v = d.verdict { out += ["## " + L("Verdetto"), "", v, ""] }
-        for p in d.phases {
-            out += ["## \(p.title)", ""]
-            if let n = p.note { out += ["_\(n)_", ""] }
-            for c in p.cards {
-                out += ["### \(c.title)", ""]
-                out.append(c.error.map { "_\($0)_" } ?? (c.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
-                out.append("")
+        func card(_ c: CardState, _ h: String) {
+            out += ["\(h) \(c.title)", ""]
+            if let m = c.usedModel, c.replaced != nil { out += ["_" + String(format: L("Ha risposto %@ al posto di %@, che non ha risposto in tempo."), m, c.replaced ?? "") + "_", ""] }
+            out.append(c.error.map { "_\($0)_" } ?? (c.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+            out.append("")
+        }
+        func phases(_ list: [PhaseState], _ h: String) {
+            for p in list {
+                out += ["\(h) \(p.title)", ""]
+                if let n = p.note { out += ["_\(n)_", ""] }
+                for c in p.cards { card(c, h + "#") }
             }
+        }
+        phases(d.phases, "##")
+        // Domande di seguito, in ordine: domanda, poi risposta rapida o nuovo giro del consiglio.
+        for t in d.turns {
+            out += ["---", "", "## " + String(format: L("Domanda di seguito %d"), t.turn), "",
+                    "> " + t.question.replacingOccurrences(of: "\n", with: "\n> "), ""]
+            if !t.attachments.isEmpty {
+                out += ["**" + L("Allegati") + ":** " + t.attachments.map { "\($0.name) (\(charsText($0.chars)))" }.joined(separator: ", "), ""]
+            }
+            phases(t.phases, "###")
+            if let a = t.answer { card(a, "###") }
+            if let v = t.verdict {
+                out += ["### " + L("Verdetto"), ""]
+                if let by = t.verdictBy { out += ["_" + String(format: L("Giudice: %@"), by) + "_", ""] }
+                out += [v, ""]
+            }
+            if t.answer == nil && t.verdict == nil && !t.isRunning { out += ["_\(t.statusText)_", ""] }
         }
         let slug = d.displayTitle.folding(options: .diacriticInsensitive, locale: .current).lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)

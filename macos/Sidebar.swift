@@ -11,8 +11,12 @@ struct DebateSummary: Decodable, Identifiable, Equatable {
     let title: String?
     let status: String
     let created_at: String
+    /// Ultima attività (una domanda di seguito la aggiorna); assente con motori vecchi.
+    let updated_at: String?
     let parent_id: Int?
     var displayTitle: String { debateTitle(title, question: question) }
+    /// Data che ordina e raggruppa la cronologia: ultima attività, altrimenti la creazione.
+    var activity: String { updated_at ?? created_at }
 }
 
 @MainActor
@@ -47,7 +51,11 @@ final class SidebarModel: ObservableObject {
             guard let data = try? await Engine.call(port(), "GET", path),
                   !Task.isCancelled,
                   let list = try? JSONDecoder().decode([DebateSummary].self, from: data) else { return }
-            items = list
+            // Una discussione con una domanda di seguito nuova sale in cima. Le date del motore sono
+            // "yyyy-MM-dd HH:mm:ss": l'ordine del testo è quello cronologico. Ordinamento stabile.
+            items = list.enumerated().sorted { a, b in
+                a.element.activity != b.element.activity ? a.element.activity > b.element.activity : a.offset < b.offset
+            }.map(\.element)
             loaded = true
         }
     }
@@ -132,7 +140,7 @@ final class SidebarModel: ObservableObject {
         var order: [String] = []
         var map: [String: [DebateSummary]] = [:]
         for d in items {
-            let date = Self.date(d.created_at) ?? .distantPast
+            let date = Self.date(d.activity) ?? .distantPast
             let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: today).day ?? .max
             let title: String
             if days <= 0 { title = L("Oggi") }
@@ -316,7 +324,7 @@ struct DebateRow: View {
 
     /// Ora (oggi e ieri) o giorno, a destra del titolo.
     private var when: String {
-        guard let date = SidebarModel.date(debate.created_at) else { return "" }
+        guard let date = SidebarModel.date(debate.activity) else { return "" }
         let cal = Calendar.current
         return cal.isDateInToday(date) || cal.isDateInYesterday(date)
             ? Self.time.string(from: date) : Self.day.string(from: date)

@@ -103,6 +103,129 @@ private struct HoverIconStyle: ButtonStyle {
     }
 }
 
+// MARK: - Pezzi comuni ai due riquadri di scrittura (composer e domanda di seguito)
+
+/// "15.234 / 20.000": compare vicino al limite; colore di avviso, di pericolo oltre il limite.
+private struct QuestionCounter: View {
+    let length: Int
+    /// Spiegazione oltre il limite (dice cosa non si può fare finché la domanda è troppo lunga).
+    let overHelp: String
+
+    var body: some View {
+        let n = length, max = AttachmentLimits.maxQuestion
+        if n > AttachmentLimits.questionWarning {
+            HStack {
+                Spacer()
+                Text(verbatim: "\(formatCount(n)) / \(formatCount(max))")
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(n > max ? Brand.danger : Brand.warning)
+                    .help(n > max ? overHelp : String(format: L("La domanda può avere al massimo %@ caratteri."), formatCount(max)))
+                    .accessibilityLabel(String(format: L("%@ caratteri su %@"), formatCount(n), formatCount(max)))
+            }
+        }
+    }
+}
+
+/// Pulsante rotondo d'invio con la freccia (⌘↩); rotella mentre si invia.
+private struct SendButton: View {
+    let enabled: Bool
+    let busy: Bool
+    let label: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle().fill(enabled ? AnyShapeStyle(Brand.accent) : AnyShapeStyle(Color.primary.opacity(0.12)))
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(enabled ? AnyShapeStyle(.white) : AnyShapeStyle(.tertiary))
+                }
+            }
+            .frame(width: 32, height: 32)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .keyboardShortcut(.return, modifiers: .command)
+        .help(help)
+        .accessibilityLabel(label)
+    }
+}
+
+/// Graffetta: sceglie i file da allegare (al massimo `AttachmentLimits.maxFiles`).
+private struct AttachButton: View {
+    let count: Int
+    let add: ([URL]) -> Void
+
+    var body: some View {
+        IconButton(L("Allega file…"), symbol: "paperclip",
+                   help: String(format: L("Allega PDF, file di testo o immagini (al massimo %d). Puoi anche trascinarli qui o incollarli."),
+                                AttachmentLimits.maxFiles)) {
+            chooseAttachments(add)
+        }
+        .disabled(count >= AttachmentLimits.maxFiles)
+    }
+}
+
+/// Avvisi sugli allegati: limite raggiunto o file non supportato, e cosa impedisce l'invio.
+private struct AttachmentWarnings: View {
+    let notice: String?
+    let items: [AttachmentItem]
+
+    var body: some View {
+        if let n = notice {
+            Label(n, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(Brand.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let p = CouncilStore.problem(of: items), !items.contains(where: \.loading) {
+            Label(p, systemImage: "exclamationmark.circle")
+                .foregroundStyle(Brand.danger)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Riquadro di scrittura: superficie con ombra, bordo d'accento con il fuoco o con file trascinati
+/// sopra, e rilascio dei file come allegati.
+private struct ComposerSurface: ViewModifier {
+    let focused: Bool
+    @Binding var dropTargeted: Bool
+    let add: ([URL]) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .surfaceBox(radius: Brand.Radius.composer,
+                        stroke: dropTargeted ? Brand.accent : focused ? Brand.accent.opacity(0.45) : Brand.hairline, shadow: true)
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: Brand.Radius.composer, style: .continuous)
+                        .fill(Brand.accent.opacity(0.06))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty else { return false }
+                add(files)
+                return true
+            } isTargeted: { dropTargeted = $0 }
+    }
+}
+
+private extension View {
+    func composerSurface(focused: Bool, dropTargeted: Binding<Bool>, add: @escaping ([URL]) -> Void) -> some View {
+        modifier(ComposerSurface(focused: focused, dropTargeted: dropTargeted, add: add))
+    }
+}
+
 // MARK: - Composer
 
 struct ComposerView: View {
@@ -135,7 +258,6 @@ struct ComposerView: View {
                     welcome.padding(.bottom, 28)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        if let p = store.parent { parentBanner(p) }
                         composerBox
                         optionsRow.padding(.horizontal, 6)
                         messages.padding(.horizontal, 6)
@@ -173,25 +295,6 @@ struct ComposerView: View {
         }
     }
 
-    private func parentBanner(_ p: ParentRef) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "arrow.turn.down.right")
-                .foregroundStyle(Brand.accent)
-                .accessibilityHidden(true)
-            Text(String(format: L("Approfondimento di: %@"), p.question))
-                .lineLimit(2)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            IconButton(L("Togli approfondimento"), symbol: "xmark",
-                       help: L("Togli il collegamento al dibattito precedente")) { store.parent = nil }
-        }
-        .font(.callout)
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 2)
-        .surfaceBox(radius: 12)
-    }
-
     // MARK: Riquadro della domanda
 
     private var composerBox: some View {
@@ -205,18 +308,12 @@ struct ComposerView: View {
                 .accessibilityLabel(L("Domanda"))
 
             if !store.attachments.isEmpty {
-                FlowLayout(spacing: 6, lineSpacing: 6) {
-                    ForEach(store.attachments) { a in
-                        AttachmentChip(item: a) { store.removeAttachment(a.id) }
-                    }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(L("Allegati"))
+                AttachmentChips(items: store.attachments) { store.removeAttachment($0) }
             }
 
-            if store.questionLength > AttachmentLimits.questionWarning {
-                questionCounter
-            }
+            QuestionCounter(length: store.questionLength,
+                            overHelp: String(format: L("La domanda supera il limite di %@ caratteri: accorciala per avviare il dibattito."),
+                                             formatCount(AttachmentLimits.maxQuestion)))
 
             Rectangle().fill(Brand.hairline).frame(height: 1).accessibilityHidden(true)
 
@@ -244,73 +341,20 @@ struct ComposerView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(L("Partecipano"))
 
-                IconButton(L("Allega file…"), symbol: "paperclip",
-                           help: String(format: L("Allega PDF, file di testo o immagini (al massimo %d). Puoi anche trascinarli qui o incollarli."),
-                                        AttachmentLimits.maxFiles)) {
-                    chooseAttachments { store.addAttachments($0) }
-                }
-                .disabled(store.attachments.count >= AttachmentLimits.maxFiles)
+                AttachButton(count: store.attachments.count) { store.addAttachments($0) }
 
-                sendButton
+                SendButton(enabled: store.canStart, busy: store.starting, label: L("Avvia il dibattito"),
+                           help: store.questionTooLong
+                               ? String(format: L("La domanda supera il limite di %@ caratteri: accorciala per avviare il dibattito."), formatCount(AttachmentLimits.maxQuestion))
+                               : store.attachmentProblem ?? L("Avvia il dibattito (⌘↩)")) {
+                    Task { await store.start() }
+                }
             }
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
         .padding(.bottom, 14)
-        .surfaceBox(radius: 20, stroke: dropTargeted ? Brand.accent : focused ? Brand.accent.opacity(0.45) : Brand.hairline, shadow: true)
-        .overlay {
-            if dropTargeted {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Brand.accent.opacity(0.06))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            let files = urls.filter(\.isFileURL)
-            guard !files.isEmpty else { return false }
-            store.addAttachments(files)
-            return true
-        } isTargeted: { dropTargeted = $0 }
-    }
-
-    /// "15.234 / 20.000": compare vicino al limite; colore di avviso, di pericolo oltre il limite.
-    private var questionCounter: some View {
-        let n = store.questionLength, max = AttachmentLimits.maxQuestion
-        return HStack {
-            Spacer()
-            Text(verbatim: "\(formatCount(n)) / \(formatCount(max))")
-                .font(.caption.weight(.medium))
-                .monospacedDigit()
-                .foregroundStyle(n > max ? Brand.danger : Brand.warning)
-                .help(n > max ? String(format: L("La domanda supera il limite di %@ caratteri: accorciala per avviare il dibattito."), formatCount(max))
-                      : String(format: L("La domanda può avere al massimo %@ caratteri."), formatCount(max)))
-                .accessibilityLabel(String(format: L("%@ caratteri su %@"), formatCount(n), formatCount(max)))
-        }
-    }
-
-    private var sendButton: some View {
-        Button { Task { await store.start() } } label: {
-            ZStack {
-                Circle().fill(store.canStart ? AnyShapeStyle(Brand.accent) : AnyShapeStyle(Color.primary.opacity(0.12)))
-                if store.starting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(store.canStart ? AnyShapeStyle(.white) : AnyShapeStyle(.tertiary))
-                }
-            }
-            .frame(width: 32, height: 32)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!store.canStart)
-        .keyboardShortcut(.return, modifiers: .command)
-        .help(store.questionTooLong
-              ? String(format: L("La domanda supera il limite di %@ caratteri: accorciala per avviare il dibattito."), formatCount(AttachmentLimits.maxQuestion))
-              : store.attachmentProblem ?? L("Avvia il dibattito (⌘↩)"))
-        .accessibilityLabel(L("Avvia il dibattito"))
+        .composerSurface(focused: focused, dropTargeted: $dropTargeted) { store.addAttachments($0) }
     }
 
     // MARK: Opzioni sotto il riquadro: menu leggeri e stima
@@ -387,16 +431,7 @@ struct ComposerView: View {
 
     @ViewBuilder private var messages: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let n = store.attachmentNotice {
-                Label(n, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(Brand.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let p = store.attachmentProblem, !store.attachments.contains(where: \.loading) {
-                Label(p, systemImage: "exclamationmark.circle")
-                    .foregroundStyle(Brand.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            AttachmentWarnings(notice: store.attachmentNotice, items: store.attachments)
             if let err = store.startError {
                 Label(err, systemImage: "exclamationmark.circle")
                     .foregroundStyle(Brand.danger)
@@ -539,7 +574,10 @@ struct DebateView: View {
     var saveFile: (_ filename: String, _ text: String) -> Void
 
     @State private var expanded: [String: Bool] = [:]
-    @State private var copied = false
+    /// Verdetto appena copiato ("verdict" o "turn-<n>"), per la spunta sul pulsante.
+    @State private var copiedKey: String?
+    /// Domande di seguito viste dal vivo: le loro fasi restano aperte anche a turno concluso.
+    @State private var liveTurns: Set<Int>
     /// Domanda lunga mostrata per intero nell'intestazione.
     @State private var questionExpanded = false
     /// Dibattito seguito dal vivo: i round restano aperti anche quando arriva il verdetto,
@@ -564,12 +602,19 @@ struct DebateView: View {
         self.debate = debate
         self.saveFile = saveFile
         _watchedLive = State(initialValue: debate.isRunning)
+        _liveTurns = State(initialValue: Set(debate.turns.filter(\.isRunning).map(\.turn)))
     }
+
+    /// Domanda di seguito in corso, se c'è.
+    private var runningTurn: Int? { debate.turns.last(where: \.isRunning)?.turn }
 
     private var steps: [DebateStep] { store.steps(debate) }
 
     var body: some View {
         ScrollViewReader { proxy in
+          // Come la chat di Claude: il contenuto scorre sopra, il campo della domanda di seguito
+          // resta fisso sotto (fuori dalla vista che scorre).
+          VStack(spacing: 0) {
             ScrollView {
                 // Pila pigra, come la chat di Claude: si costruiscono solo le righe vicine alla parte
                 // visibile. Ogni fase si scompone in righe (intestazione e una riga per coppia di
@@ -590,21 +635,14 @@ struct DebateView: View {
 
                     // Il verdetto è il risultato: viene subito dopo l'intestazione, prima dello svolgimento.
                     if let v = debate.verdict {
-                        verdictBox(v).id("phase-verdict")
+                        verdictBox(v, by: debate.verdictBy).id("phase-verdict")
                             .padding(.top, 24)
                             .transition(.opacity)
                     } else if debate.isRunning && debate.judging {
                         // Segnaposto al posto del verdetto: la vista dal vivo sale qui mentre il giudice scrive.
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(L("Il giudice sta scrivendo il verdetto…"))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .surfaceBox(radius: Brand.Radius.panel, stroke: Brand.accent.opacity(0.28))
-                        .id("phase-verdict")
-                        .padding(.top, 24)
+                        judgingPlaceholder
+                            .id("phase-verdict")
+                            .padding(.top, 24)
                     }
 
                     if !debate.phases.isEmpty {
@@ -613,6 +651,11 @@ struct DebateView: View {
                         ForEach(Array(debate.phases.enumerated()), id: \.element.id) { i, p in
                             phaseRows(p, number: i + 1, last: i == debate.phases.count - 1)
                         }
+                    }
+
+                    // Domande di seguito, in ordine, dopo il dibattito originale.
+                    ForEach(debate.turns, id: \.turn) { t in
+                        turnRows(t)
                     }
 
                     Color.clear.frame(height: 1).id(Self.endID)
@@ -693,6 +736,24 @@ struct DebateView: View {
                 }
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: show)
             }
+
+            if store.canFollowUp(debate) {
+                FollowupBar(store: store, debate: debate)
+            }
+          }
+          // Inviata una domanda di seguito: si va in fondo e si resta agganciati mentre arriva la
+          // risposta (resnap di `pinnedBottom`), come nella chat di Claude.
+          .onChange(of: debate.turns.count) { old, new in
+              guard new > old, runningTurn != nil else { return }
+              pinnedBottom = true
+              Task { @MainActor in
+                  try? await Task.sleep(for: .milliseconds(60))
+                  proxy.scrollTo(Self.endID, anchor: .bottom)
+              }
+          }
+          .onChange(of: runningTurn) { _, n in
+              if let n { liveTurns.insert(n) }
+          }
         }
     }
 
@@ -736,13 +797,7 @@ struct DebateView: View {
             }
 
             if !debate.attachments.isEmpty {
-                FlowLayout(spacing: 6, lineSpacing: 6) {
-                    ForEach(Array(debate.attachments.enumerated()), id: \.offset) { _, a in
-                        AttachmentTag(meta: a)
-                    }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(L("Allegati"))
+                AttachmentTags(items: debate.attachments)
             }
 
             Group {
@@ -876,16 +931,17 @@ struct DebateView: View {
     // MARK: Azioni sul verdetto
 
     /// Pulsanti-icona in alto a destra del verdetto, ciascuno con tooltip e nome per VoiceOver.
-    private func actions(_ verdict: String) -> some View {
-        HStack(spacing: 2) {
+    private func actions(_ verdict: String, key: String) -> some View {
+        let copied = copiedKey == key
+        return HStack(spacing: 2) {
             IconButton(copied ? L("Copiato") : L("Copia verdetto")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(verdict, forType: .string)
-                copied = true
+                copiedKey = key
                 AccessibilityNotification.Announcement(L("Verdetto copiato")).post()
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(2))
-                    copied = false
+                    if copiedKey == key { copiedKey = nil }
                 }
             } icon: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
@@ -904,16 +960,24 @@ struct DebateView: View {
             .buttonStyle(HoverIconStyle())
             .help(L("Condividi il verdetto"))
             .accessibilityLabel(L("Condividi il verdetto"))
-            IconButton(L("Approfondisci…"), symbol: "arrow.turn.down.right",
-                       help: L("Approfondisci: nuova domanda che parte da questo dibattito")) {
-                store.deepen()
-            }
         }
+    }
+
+    /// Segnaposto mentre il giudice scrive il verdetto.
+    private var judgingPlaceholder: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(L("Il giudice sta scrivendo il verdetto…"))
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceBox(radius: Brand.Radius.panel, stroke: Brand.accent.opacity(0.28))
     }
 
     // MARK: Verdetto: scheda protagonista
 
-    private func verdictBox(_ text: String) -> some View {
+    private func verdictBox(_ text: String, by verdictBy: String?, key: String = "verdict") -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: "checkmark.seal.fill")
@@ -925,7 +989,7 @@ struct DebateView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(L("Verdetto del consiglio"))
                         .font(.title3.weight(.semibold))
-                    if let by = debate.verdictBy, !by.isEmpty {
+                    if let by = verdictBy, !by.isEmpty {
                         Text(String(format: L("Giudice: %@"), by))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -935,7 +999,7 @@ struct DebateView: View {
                 .accessibilityAddTraits(.isHeader)
 
                 Spacer(minLength: 8)
-                actions(text)
+                actions(text, key: key)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
@@ -996,8 +1060,11 @@ struct DebateView: View {
 
     // MARK: Round
 
-    private func isExpanded(_ id: String) -> Bool {
-        expanded[id] ?? store.expandedPhases[debate.id]?[id] ?? (watchedLive || debate.verdict == nil)
+    /// Fase aperta? Scelta dell'utente o, in mancanza, aperta dal vivo o finché manca il risultato.
+    private func isExpanded(_ key: String, in t: DebateState? = nil) -> Bool {
+        let fallback = t.map { liveTurns.contains($0.turn) || $0.isRunning || ($0.verdict == nil && $0.answer?.text == nil) }
+            ?? (watchedLive || debate.verdict == nil)
+        return expanded[key] ?? store.expandedPhases[debate.id]?[key] ?? fallback
     }
 
     private func setExpanded(_ id: String, _ open: Bool) {
@@ -1008,13 +1075,18 @@ struct DebateView: View {
     /// Tappa del percorso: numero su una linea verticale, intestazione cliccabile, card sotto.
     /// Restituisce più righe (intestazione + una riga per coppia di card) perché la pila pigra
     /// costruisca solo quelle visibili; la linea del percorso è disegnata riga per riga.
+    /// `t`: turno di una domanda di seguito (nil = dibattito originale); le sue righe hanno
+    /// identità e stato di apertura propri ("turn-<n>-…").
     @ViewBuilder
-    private func phaseRows(_ p: PhaseState, number: Int, last: Bool) -> some View {
-        let open = isExpanded(p.id)
-        let state = store.phaseState(p, in: debate)
+    private func phaseRows(_ p: PhaseState, number: Int, last: Bool, in t: DebateState? = nil) -> some View {
+        let d = t ?? debate
+        let prefix = t.map { "turn-\($0.turn)-" } ?? ""
+        let key = prefix + p.id
+        let open = isExpanded(key, in: t)
+        let state = store.phaseState(p, in: d)
         let toggle = {
-            if reduceMotion { setExpanded(p.id, !open) }
-            else { withAnimation(.easeOut(duration: 0.18)) { setExpanded(p.id, !open) } }
+            if reduceMotion { setExpanded(key, !open) }
+            else { withAnimation(.easeOut(duration: 0.18)) { setExpanded(key, !open) } }
         }
         // Card per riga: due se la colonna delle card (contenuto meno numero e spazio) è larga.
         // La ricerca ha una sola card (il dossier): sempre a tutta larghezza.
@@ -1028,7 +1100,7 @@ struct DebateView: View {
             StepMarker(number: number, state: state, reduceMotion: reduceMotion)
         } content: {
             Button(action: toggle) {
-                PhaseHeader(eyebrow: store.phaseEyebrow(p.id, in: debate),
+                PhaseHeader(eyebrow: store.phaseEyebrow(p.id, in: d),
                             name: CouncilStore.phaseNames[p.id] ?? p.title,
                             description: CouncilStore.phaseDescriptions[p.id],
                             note: p.note, state: state, meta: phaseMeta(p, state),
@@ -1040,18 +1112,17 @@ struct DebateView: View {
             .accessibilityValue(p.cards.isEmpty ? "" : open ? L("espanso") : L("compresso"))
             .help(p.cards.isEmpty ? "" : open ? L("Comprimi la fase") : L("Espandi la fase"))
         }
-        .id("phase-\(p.id)")
+        .id("\(prefix)phase-\(p.id)")
 
         // Identità che cambia con le colonne: passando da 1 a 2 card per riga la pila pigra non
         // deve riusare l'altezza misurata per la riga a card singola (il testo uscirebbe dalla card).
         ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
-            let key = "\(p.id)-\(cols)-\(i)"
             TimelineRow(line: !last, lineTop: 0, top: i == 0 ? 10 : 12, bottom: i == rows.count - 1 ? gap : 0) {
                 Color.clear.frame(width: 28, height: 0)
             } content: {
-                CardsRow(cards: row, cols: cols, running: debate.isRunning, since: p.startedAt)
+                CardsRow(cards: row, cols: cols, running: d.isRunning, since: p.startedAt)
             }
-            .id(key)
+            .id("\(prefix)\(p.id)-\(cols)-\(i)")
             .transition(.opacity)
         }
     }
@@ -1067,6 +1138,290 @@ struct DebateView: View {
         if missing > 0 { parts.append(String(format: L("%d senza risposta"), missing)) }
         if let longest = p.cards.compactMap(\.seconds).max() { parts.append(String(format: L("fino a %d s"), Int(longest.rounded()))) }
         return parts.joined(separator: " · ")
+    }
+}
+
+extension DebateView {
+    // MARK: Domande di seguito
+
+    /// Un turno di seguito come righe della pila pigra: domanda, eventuale ricerca, poi la risposta
+    /// rapida o le fasi del consiglio con il verdetto. Ogni riga ha un'identità con il turno.
+    @ViewBuilder
+    fileprivate func turnRows(_ t: DebateState) -> some View {
+        let n = t.turn
+        TurnQuestion(turn: t)
+            .id("turn-\(n)-question")
+            .padding(.top, 40)
+            .padding(.bottom, 16)
+
+        ForEach(Array(t.phases.enumerated()), id: \.element.id) { i, p in
+            phaseRows(p, number: i + 1, last: i == t.phases.count - 1, in: t)
+        }
+
+        if t.isQuick {
+            if let a = t.answer {
+                CardView(card: a, running: t.isRunning, since: t.startedAt)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(String(format: L("Risposta alla domanda di seguito %d"), n))
+                    .id("turn-\(n)-answer")
+                    .padding(.top, t.phases.isEmpty ? 0 : 20)
+            } else {
+                turnStatus(t).id("turn-\(n)-status")
+            }
+        } else if let v = t.verdict {
+            verdictBox(v, by: t.verdictBy, key: "turn-\(n)")
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(String(format: L("Verdetto della domanda di seguito %d"), n))
+                .id("turn-\(n)-verdict")
+                .padding(.top, 24)
+        } else if t.isRunning && t.judging {
+            judgingPlaceholder.id("turn-\(n)-verdict").padding(.top, 24)
+        } else if !t.isRunning || t.phases.isEmpty {
+            turnStatus(t).id("turn-\(n)-status").padding(.top, t.phases.isEmpty ? 0 : 20)
+        }
+    }
+
+    /// Stato del turno senza risultato: in attesa (con la rotella) o fermato, con il motivo.
+    fileprivate func turnStatus(_ t: DebateState) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if t.isRunning {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: t.status == "failed" ? "xmark.octagon" : "stop.circle")
+                    .foregroundStyle(t.status == "failed" ? AnyShapeStyle(Brand.danger) : AnyShapeStyle(.secondary))
+                    .accessibilityHidden(true)
+            }
+            Text(t.isRunning ? t.statusText : (t.status == "done" ? L("Nessuna risposta.") : t.statusText))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceBox(radius: 12)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Domanda di seguito: fumetto a destra come nella chat di Claude, con gli allegati del turno.
+private struct TurnQuestion: View {
+    let turn: DebateState
+
+    private var kind: String {
+        turn.isQuick ? L("Domanda di seguito · risposta rapida") : L("Domanda di seguito · il consiglio ridiscute")
+    }
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            Label(kind, systemImage: turn.isQuick ? "bolt" : "person.3")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(turn.question)
+                .font(.body)
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: Brand.Radius.panel, style: .continuous).fill(Brand.selection))
+                .accessibilityLabel(L("Domanda") + ": " + turn.question)
+            if !turn.attachments.isEmpty {
+                AttachmentTags(items: turn.attachments)
+            }
+        }
+        .frame(maxWidth: 640, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(format: L("Domanda di seguito %d"), turn.turn) + (turn.isQuick ? "" : ", " + L("il consiglio ridiscute")))
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// MARK: - Campo della domanda di seguito (fisso in fondo alla discussione)
+
+private struct FollowupBar: View {
+    @ObservedObject var store: CouncilStore
+    let debate: DebateState
+    @FocusState private var focused: Bool
+    @State private var dropTargeted = false
+    @State private var pasteMonitor = AttachmentPasteMonitor()
+
+    /// Una domanda di seguito è in corso: il campo aspetta e c'è il pulsante per fermare.
+    private var running: Bool { debate.busy }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            box
+            VStack(alignment: .leading, spacing: 4) {
+                AttachmentWarnings(notice: store.followupNotice, items: store.followupAttachments)
+                if store.followupMode == "council" && store.councilModels(debate).count < 2 {
+                    Label(L("Per rilanciare il consiglio servono almeno 2 partecipanti della discussione ancora disponibili."),
+                          systemImage: "exclamationmark.circle")
+                        .foregroundStyle(Brand.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let e = store.followupError {
+                    Label(e, systemImage: "exclamationmark.circle")
+                        .foregroundStyle(Brand.danger)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.caption)
+            .padding(.horizontal, 6)
+        }
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 28)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            pasteMonitor.start { [store] urls, image in
+                if let image { store.addPastedImage(image, to: .followup) } else { store.addAttachments(urls, to: .followup) }
+            }
+        }
+        .onDisappear { pasteMonitor.stop() }
+    }
+
+    private var box: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Domanda di seguito", text: $store.followup,
+                      prompt: running ? Text("Attendi la risposta…") : Text("Chiedi ancora qualcosa su questa discussione…"),
+                      axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .lineLimit(1...8)
+                .lineSpacing(2)
+                .focused($focused)
+                .disabled(running || store.sendingFollowup)
+                .accessibilityLabel(L("Domanda di seguito"))
+
+            if !store.followupAttachments.isEmpty {
+                AttachmentChips(items: store.followupAttachments) { store.removeAttachment($0, from: .followup) }
+            }
+
+            QuestionCounter(length: store.followupLength,
+                            overHelp: String(format: L("La domanda supera il limite di %@ caratteri: accorciala per inviarla."),
+                                             formatCount(AttachmentLimits.maxQuestion)))
+
+            HStack(spacing: 12) {
+                AttachButton(count: store.followupAttachments.count) { store.addAttachments($0, to: .followup) }
+                    .disabled(running)
+
+                Toggle(isOn: $store.followupWebSearch) {
+                    Label(L("Cerca sul web"), systemImage: "globe")
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .disabled(!store.webSearchAvailable || running)
+                .help(webHelp)
+                .accessibilityLabel(L("Cerca sul web"))
+                .accessibilityHint(webHelp)
+
+                Spacer(minLength: 8)
+
+                responderMenu
+
+                if running {
+                    Button { Task { await store.cancel() } } label: {
+                        ZStack {
+                            Circle().fill(Brand.accent)
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 32, height: 32)
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(L("Interrompi (⌘.). Le risposte già arrivate restano salvate."))
+                    .accessibilityLabel(L("Interrompi"))
+                } else {
+                    SendButton(enabled: store.canSendFollowup, busy: store.sendingFollowup, label: L("Invia la domanda"),
+                               help: store.followupProblem(debate) ?? L("Invia la domanda (⌘↩)")) {
+                        Task { await store.sendFollowup() }
+                    }
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .composerSurface(focused: focused, dropTargeted: $dropTargeted) { store.addAttachments($0, to: .followup) }
+    }
+
+    private var webHelp: String {
+        store.webSearchAvailable
+            ? L("Prima di rispondere un modello cerca sul web informazioni aggiornate.")
+            : L("Ricerca sul web non disponibile: nessun modello configurato può cercare sul web.")
+    }
+
+    private var roundsText: String {
+        let r = debate.rounds ?? store.rounds
+        return r == 0 ? L("senza round") : (r == 1 ? L("1 round") : String(format: L("%d round"), r))
+    }
+
+    /// Chi risponde: risposta rapida di un modello (predefinito il giudice) o tutto il consiglio.
+    private var responderMenu: some View {
+        let council = store.followupMode == "council"
+        let label = council ? L("Rilancia il consiglio")
+            : String(format: L("Risposta rapida: %@"), store.quickResponder(debate).label)
+        return Menu {
+            Picker("Chi risponde", selection: whoBinding) {
+                Section("Risposta rapida") {
+                    Text(String(format: L("Giudice della discussione (%@)"), store.discussionJudge(debate).label)).tag("quick|")
+                    ForEach(store.claudeModels, id: \.self) { m in
+                        Text(verbatim: "Claude \(m.capitalized)").tag("quick|claude:\(m)")
+                    }
+                    ForEach(store.voices.filter { !$0.isClaude }) { v in
+                        Text(v.label).tag("quick|voice:\(v.id)")
+                    }
+                }
+                Section("Tutto il consiglio") {
+                    Text(L("Rilancia il consiglio") + " · " + String(format: L("%d modelli"), store.councilModels(debate).count)
+                         + " · " + roundsText).tag("council")
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Label(label, systemImage: council ? "person.3" : "bolt")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.visible)
+        .fixedSize()
+        .disabled(running)
+        .help(council
+              ? L("Il consiglio ridiscute la domanda con gli stessi partecipanti e round, poi il giudice emette un nuovo verdetto.")
+              : L("Un solo modello risponde subito, tenendo conto del dibattito."))
+        .accessibilityLabel(L("Chi risponde"))
+        .accessibilityValue(label)
+    }
+
+    /// Valore unico del menu: "council" oppure "quick|" + scelta del modello ("" = giudice).
+    private var whoBinding: Binding<String> {
+        Binding(
+            get: {
+                guard store.followupMode != "council" else { return "council" }
+                let r = store.responder
+                let valid = r.hasPrefix("claude:") ? store.claudeModels.contains(String(r.dropFirst(7)))
+                    : r.hasPrefix("voice:") ? store.voices.contains { $0.id == String(r.dropFirst(6)) } : false
+                return "quick|" + (valid ? r : "")
+            },
+            set: { tag in
+                if tag == "council" {
+                    store.followupMode = "council"
+                } else {
+                    store.followupMode = "quick"
+                    store.responder = String(tag.dropFirst(6))
+                }
+            }
+        )
     }
 }
 

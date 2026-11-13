@@ -260,6 +260,37 @@ struct AttachmentChip: View {
     }
 }
 
+/// Allegati in preparazione (composer e domanda di seguito), su più righe se serve.
+struct AttachmentChips: View {
+    let items: [AttachmentItem]
+    let remove: (UUID) -> Void
+
+    var body: some View {
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(items) { a in
+                AttachmentChip(item: a) { remove(a.id) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L("Allegati"))
+    }
+}
+
+/// Allegati di una discussione salvata o di una domanda di seguito.
+struct AttachmentTags: View {
+    let items: [AttachmentMeta]
+
+    var body: some View {
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, a in
+                AttachmentTag(meta: a)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L("Allegati"))
+    }
+}
+
 /// Allegato nell'intestazione di una discussione: icona del tipo, nome e caratteri.
 struct AttachmentTag: View {
     let meta: AttachmentMeta

@@ -473,9 +473,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         window.makeKeyAndOrderFront(nil)
 
         // Titolo = domanda, sottotitolo = meta; si aggiornano con la discussione mostrata.
-        Publishers.CombineLatest(store.$current, store.$parent)
+        store.$current
             .receive(on: RunLoop.main)
-            .sink { [weak self] d, p in self?.updateTitle(d, parent: p) }
+            .sink { [weak self] d in self?.updateTitle(d) }
             .store(in: &observers)
     }
 
@@ -570,10 +570,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         return f
     }()
 
-    private func updateTitle(_ d: DebateState?, parent: ParentRef?) {
+    private func updateTitle(_ d: DebateState?) {
         guard let d else {
             window.title = L("Nuova discussione")
-            window.subtitle = parent.map { String(format: L("Approfondimento di «%@»"), Self.short($0.question, 40)) } ?? ""
+            window.subtitle = ""
             updateToolbarItems(hasDebate: false)
             return
         }
@@ -582,6 +582,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         if d.isRunning {
             let phase = d.phases.last?.title
             window.subtitle = phase.map { String(format: L("In corso — %@"), $0) } ?? L("In corso")
+        } else if d.busy {
+            window.subtitle = String(format: L("In corso — %@"), L("domanda di seguito"))
         } else {
             if let r = d.rounds { parts.append(r == 0 ? L("senza round") : (r == 1 ? L("1 round") : String(format: L("%d round"), r))) }
             if !d.participants.isEmpty { parts.append(String(format: L("%d modelli"), d.participants.count)) }
@@ -697,7 +699,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         debate.addItem(item(L("Interrompi"), #selector(stopDebate(_:)), "."))
         debate.addItem(.separator())
         debate.addItem(item(L("Copia verdetto"), #selector(copyVerdict(_:)), "c", [.command, .shift]))
-        debate.addItem(item(L("Approfondisci…"), #selector(deepenDebate(_:)), "d"))
 
         let win = NSMenu(title: L("Finestra"))
         win.addItem(withTitle: L("Contrai"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -763,8 +764,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         sidebar.requestDelete()
     }
 
+    /// ⌘↩: avvia il dibattito dal composer o invia la domanda di seguito nella discussione aperta.
     @objc func startDebate(_ sender: Any?) {
-        Task { await store.start() }
+        Task {
+            if store.current == nil { await store.start() } else { await store.sendFollowup() }
+        }
     }
 
     @objc func stopDebate(_ sender: Any?) {
@@ -775,11 +779,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         guard let v = store.current?.verdict else { NSSound.beep(); return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(v, forType: .string)
-    }
-
-    @objc func deepenDebate(_ sender: Any?) {
-        sidebar.selected = nil
-        store.deepen()
     }
 
     /// Esporta una discussione della cronologia: se non è quella mostrata la apre prima.
@@ -810,13 +809,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSM
         case #selector(findDiscussions(_:)):
             return NSApp.keyWindow === window && store.engineReady
         case #selector(startDebate(_:)):
-            return NSApp.keyWindow === window && d == nil && store.canStart
+            return NSApp.keyWindow === window && (d == nil ? store.canStart : store.canSendFollowup)
         case #selector(stopDebate(_:)):
-            return NSApp.keyWindow === window && d?.isRunning == true
+            return NSApp.keyWindow === window && d?.busy == true
         case #selector(copyVerdict(_:)), #selector(exportDebate(_:)):
             return d?.verdict != nil
-        case #selector(deepenDebate(_:)):
-            return d != nil && d?.isRunning == false
         case #selector(zoomTextIn(_:)):
             return TextZoom.canGrow
         case #selector(zoomTextOut(_:)):

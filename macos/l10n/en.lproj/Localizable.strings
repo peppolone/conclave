@@ -51,10 +51,6 @@
 "Apertura" = "Opening";
 "Apertura · %@" = "Opening · %@";
 "Approfondimento" = "Follow-up";
-"Approfondimento di «%@»" = "Follow-up to “%@”";
-"Approfondimento di: %@" = "Follow-up to: %@";
-"Approfondisci: nuova domanda che parte da questo dibattito" = "Follow up: a new question that builds on this debate";
-"Approfondisci…" = "Follow Up…";
 "Apri Cerebras Cloud e registrati." = "Open Cerebras Cloud and sign up.";
 "Apri Google AI Studio e accedi con il tuo account Google (accetta i termini, se li chiede)." = "Open Google AI Studio and sign in with your Google account (accept the terms if asked).";
 "Apri OpenRouter e registrati." = "Open OpenRouter and sign up.";
@@ -347,8 +343,6 @@
 "Taglia" = "Cut";
 "Tema" = "Theme";
 "Togli %@ dal consiglio" = "Remove %@ from the council";
-"Togli approfondimento" = "Remove Follow-up";
-"Togli il collegamento al dibattito precedente" = "Remove the link to the previous debate";
 "Trova" = "Find";
 "Ultimi 30 giorni" = "Previous 30 Days";
 "Ultimi 7 giorni" = "Previous 7 Days";
@@ -473,3 +467,33 @@
 "Cerca sul web" = "Search the web";
 "Ricerca sul web non riuscita" = "Web search failed";
 "Il dibattito continua senza i risultati della ricerca." = "The debate continues without the search results.";
+
+/* Chat continua: domande di seguito */
+"Risposta in corso…" = "Answering…";
+"Risposta rapida" = "Quick answer";
+"Risposta rapida · %@" = "Quick answer · %@";
+"La domanda supera il limite di %@ caratteri: accorciala per inviarla." = "The question exceeds the %@-character limit: shorten it to send it.";
+"Per rilanciare il consiglio servono almeno 2 partecipanti della discussione ancora disponibili." = "To ask the council again, at least 2 of the discussion’s participants must still be available.";
+"La discussione è ancora in corso: attendi che finisca, poi riprova." = "The discussion is still in progress: wait for it to finish, then try again.";
+"Domanda non inviata: %@" = "Question not sent: %@";
+"Domanda di seguito %d" = "Follow-up question %d";
+"domanda di seguito" = "follow-up question";
+"Domanda di seguito" = "Follow-up question";
+"Risposta alla domanda di seguito %d" = "Answer to follow-up question %d";
+"Verdetto della domanda di seguito %d" = "Verdict on follow-up question %d";
+"Nessuna risposta." = "No answer.";
+"Domanda di seguito · risposta rapida" = "Follow-up · quick answer";
+"Domanda di seguito · il consiglio ridiscute" = "Follow-up · the council debates again";
+"il consiglio ridiscute" = "the council debates again";
+"Attendi la risposta…" = "Waiting for the answer…";
+"Chiedi ancora qualcosa su questa discussione…" = "Ask something else about this discussion…";
+"Invia la domanda" = "Send Question";
+"Invia la domanda (⌘↩)" = "Send the question (⌘↩)";
+"Prima di rispondere un modello cerca sul web informazioni aggiornate." = "Before answering, a model searches the web for up-to-date information.";
+"Rilancia il consiglio" = "Ask the Council Again";
+"Risposta rapida: %@" = "Quick answer: %@";
+"Chi risponde" = "Who Answers";
+"Giudice della discussione (%@)" = "Discussion judge (%@)";
+"Tutto il consiglio" = "Whole council";
+"Il consiglio ridiscute la domanda con gli stessi partecipanti e round, poi il giudice emette un nuovo verdetto." = "The council debates the question with the same participants and rounds, then the judge gives a new verdict.";
+"Un solo modello risponde subito, tenendo conto del dibattito." = "A single model answers right away, taking the debate into account.";
