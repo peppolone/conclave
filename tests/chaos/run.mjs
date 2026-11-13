@@ -970,6 +970,8 @@ SCENARIOS.ag = async function ag() {
   const started = Date.now();
   let id;
   const p = debate("web-cancel-hang", ["ok-a", "ok-b"], 1, "ok-a", 40_000, { onStart: (x) => (id = x), extra: { webSearch: true } });
+  // Come in "at": si annulla solo quando l'id è arrivato (runner lenti).
+  for (let i = 0; i < 100 && id === undefined; i++) await new Promise((res) => setTimeout(res, 100));
   await new Promise((res) => setTimeout(res, 1500));
   const c = await api("POST", `/api/debates/${id}/cancel`, { body: {} });
   if (c.status !== 200) return [false, `cancel → ${c.status}`, (Date.now() - started) / 1000];
@@ -1428,6 +1430,9 @@ SCENARIOS.at = async function at() {
   const secs = () => (Date.now() - started) / 1000;
   let id;
   const p = debate("conv-noverdict", ["ok-a", "ok-b"], 0, "hang", 30_000, { onStart: (x) => (id = x) });
+  // Si annulla solo quando l'id è arrivato: sul runner della CI la risposta del POST può tardare
+  // oltre un'attesa fissa e l'annullamento andava a /api/debates/undefined/cancel.
+  for (let i = 0; i < 100 && id === undefined; i++) await new Promise((res) => setTimeout(res, 100));
   await new Promise((res) => setTimeout(res, 1500));
   await api("POST", `/api/debates/${id}/cancel`, { body: {} });
   const r = await p;
