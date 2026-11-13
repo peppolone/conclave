@@ -1,7 +1,11 @@
 # Conclave
 
-A native macOS app where several AI models debate your question in rounds — independent
-answers, anonymous cross-critique, revision, final position — and a judge writes the verdict.
+**An LLM council for your Mac.** Claude, Gemini, GPT-OSS, Qwen and other models debate your
+question in rounds — independent answers, anonymous cross-critique, revision, final position —
+and a judge writes the verdict. A native SwiftUI app, **free with free API keys** (Gemini, Groq,
+OpenRouter) or with your Claude subscription.
+
+**[⬇ Download the latest DMG](https://github.com/peppolone/Conclave/releases/latest)** · macOS 26+ · Apple Silicon and Intel
 
 Everything runs on your Mac: the app bundles a small local engine and talks only to the model
 providers you configure. No account, no server, no telemetry.
@@ -12,13 +16,20 @@ providers you configure. No account, no server, no telemetry.
 ![Status: beta](https://img.shields.io/badge/status-beta%201-orange)
 [![Release](https://github.com/peppolone/Conclave/actions/workflows/release.yml/badge.svg)](https://github.com/peppolone/Conclave/actions/workflows/release.yml)
 
-> [!WARNING]
-> **Beta 1 — work in progress.** Conclave is under active development: expect rough edges, missing
-> features and changes between versions. Bug reports and feedback are welcome in
-> [Issues](https://github.com/peppolone/Conclave/issues).
-
 ![Composer](docs/screenshots/composer.png)
 ![A finished debate with the verdict](docs/screenshots/debate.png)
+
+> [!NOTE]
+> **Beta — work in progress.** Expect rough edges; feedback is welcome in
+> [Issues](https://github.com/peppolone/Conclave/issues).
+
+## Why a council?
+
+A single model answers confidently even when it is wrong. In Conclave the answers are anonymous
+(Answer A, B, C…), so models critique arguments rather than brands, a random member plays devil's
+advocate, and the judge weighs evidence instead of counting votes. Compared with web-based
+LLM-council projects, Conclave is a native Mac app with history, follow-up questions, automatic
+fallbacks when a free model is slow or retired, and no server to run.
 
 ## Features
 
