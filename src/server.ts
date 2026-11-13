@@ -19,6 +19,7 @@ interface Running {
 const running = new Map<number, Running>();
 /** Oltre questo numero il dibattito diventa lento e consuma quote senza aggiungere idee nuove. */
 const MAX_PARTICIPANTS = 10;
+const SSE_PING_MS = 10_000;
 
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku"];
 const DEFAULT_ROUNDS: Rounds = 3;
@@ -207,7 +208,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       for (const e of r.events) res.write(`data: ${JSON.stringify(e)}\n\n`);
       if (r.events.some((e) => e.type === "done")) return res.end();
       r.clients.add(res);
-      req.on("close", () => r.clients.delete(res));
+      // Commento SSE periodico: durante un giudice lento il flusso non resta muto per minuti.
+      const ping = setInterval(() => { if (!res.writableEnded) res.write(": ping\n\n"); }, SSE_PING_MS);
+      res.on("close", () => clearInterval(ping));
+      req.on("close", () => { clearInterval(ping); r.clients.delete(res); });
       return;
     }
 

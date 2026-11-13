@@ -672,7 +672,114 @@ SCENARIOS.x = async function x() {
   return [true, `${hellos.length} hello ostili: motore vivo, solo VALID_API_KEY impostata, nessun valore nel log`, secs()];
 };
 
+// Motore ucciso (SIGKILL, come un crash) con un dibattito "running": riavviato sulla stessa cartella
+// dati, il dibattito risulta "interrupted" sia nel dettaglio sia nella lista, e non è più live.
+SCENARIOS.y = async function y() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const dir = await mkdtemp(join(tmpdir(), "council-chaos-restart-"));
+  extraDirs.push(dir);
+  const cfgPath = join(dir, "models.json");
+  await writeFile(cfgPath, JSON.stringify({
+    providers: { chaos: { name: "Chaos", baseUrl: `http://127.0.0.1:${mockPort}/v1`, keyEnv: "CHAOS_KEY" } },
+    judge: { id: "j", label: "Giudice", kind: "openai", provider: "chaos", model: "ok-a" },
+    models: [
+      { id: "lento", label: "Lento", kind: "openai", provider: "chaos", model: "slow", family: "lento", default: false },
+      { id: "bloccato", label: "Bloccato", kind: "openai", provider: "chaos", model: "hang", family: "bloccato", default: false },
+    ],
+  }));
+  const boot = async () => {
+    const tok = randomBytes(32).toString("hex");
+    const e = await startProcess(process.execPath, ["--disable-warning=ExperimentalWarning", "src/server.ts"],
+      cleanEnv({ COUNCIL_DATA: dir, COUNCIL_MODELS: cfgPath }), "COUNCIL_PORT", JSON.stringify({ token: tok, keys: { CHAOS_KEY } }));
+    extraProcs.push(e.proc);
+    e.proc.removeAllListeners("exit");
+    e.proc.on("exit", (code) => { e.proc.exited = code ?? "signal"; });
+    return { ...e, h: authed(tok) };
+  };
+  const e1 = await boot();
+  const c = await api("POST", "/api/debates", { port: e1.port, headers: e1.h,
+    body: { question: QUESTION("y"), models: ["lento", "bloccato"], rounds: 1, judge: "lento", claudeModel: "sonnet" } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  const id = c.body.id;
+  // Attende che il dibattito sia davvero in corso (salvato come running) prima del crash.
+  await new Promise((res) => setTimeout(res, 1500));
+  const before = await api("GET", `/api/debates/${id}`, { port: e1.port, headers: e1.h });
+  if (before.body?.status !== "running") return [false, `prima del crash stato "${before.body?.status}"`, secs()];
+  const gone = new Promise((res) => e1.proc.once("exit", res));
+  e1.proc.kill("SIGKILL");
+  await gone;
+  const e2 = await boot();
+  const d = await api("GET", `/api/debates/${id}`, { port: e2.port, headers: e2.h });
+  if (d.status !== 200) return [false, `GET dopo il riavvio → ${d.status}`, secs()];
+  if (d.body.status !== "interrupted") return [false, `stato dopo il riavvio "${d.body.status}"`, secs()];
+  if (d.body.live) return [false, "dibattito interrotto ancora segnato live", secs()];
+  const l = await api("GET", "/api/debates", { port: e2.port, headers: e2.h });
+  const row = Array.isArray(l.body) ? l.body.find((x) => x.id === id) : null;
+  if (!row) return [false, `dibattito assente dalla lista (${l.status})`, secs()];
+  if (row.status !== "interrupted") return [false, `nella lista stato "${row.status}"`, secs()];
+  const ev = await api("GET", `/api/debates/${id}/events`, { port: e2.port, headers: e2.h });
+  if (ev.status !== 404) return [false, `flusso eventi di un dibattito interrotto → ${ev.status}`, secs()];
+  e2.proc.kill("SIGTERM");
+  return [true, `dopo SIGKILL e riavvio: interrupted in dettaglio e lista, non live, eventi 404`, secs()];
+};
+
+// Giudice lento (mock "slow", 20 s): il flusso SSE non deve restare muto più di HEARTBEAT_MAX_S
+// mentre il giudice lavora. Si contano anche i commenti SSE (righe ":"), che fanno da heartbeat.
+// I tempi del motore non sono configurabili: lo scenario dura ~25 s.
+const HEARTBEAT_MAX_S = 16;
+SCENARIOS.z = async function z() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const c = await api("POST", "/api/debates", { body: { question: QUESTION("z"), models: ["ok-a", "ok-b"], rounds: 0, judge: "slow", claudeModel: "sonnet" } });
+  if (c.status !== 201) return [false, `POST /api/debates → ${c.status}`, secs()];
+  const id = c.body.id;
+  const res = await new Promise((resolve) => {
+    let last = Date.now(), maxGap = 0, comments = 0, judgeAt = null, done = false, buf = "";
+    const finish = (timedOut) => {
+      clearTimeout(timer);
+      req.destroy();
+      resolve({ maxGap, comments, judgeAt, done, timedOut });
+    };
+    const timer = setTimeout(() => finish(true), 60_000);
+    const req = request({ host: "127.0.0.1", port: enginePort, path: `/api/debates/${id}/events`, headers: { Host: `127.0.0.1:${enginePort}`, Authorization: `Bearer ${TOKEN}` } }, (r) => {
+      if (r.statusCode !== 200) { r.resume(); return finish(false); }
+      r.setEncoding("utf8");
+      r.on("data", (chunk) => {
+        const now = Date.now();
+        // Il silenzio conta solo durante il giudice: prima i modelli ok rispondono subito.
+        if (judgeAt !== null) maxGap = Math.max(maxGap, (now - last) / 1000);
+        last = now;
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          for (const line of block.split("\n")) {
+            if (line.startsWith(":")) comments++;
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const e = JSON.parse(line.slice(6));
+              if (e.type === "phase" && e.phase === "verdict" && judgeAt === null) judgeAt = now;
+              if (e.type === "done") { done = true; return finish(false); }
+            } catch { /* riga non JSON */ }
+          }
+        }
+      });
+      r.on("end", () => finish(false));
+    });
+    req.on("error", () => finish(false));
+    req.end();
+  });
+  if (res.timedOut || !res.done) return [false, `nessun evento done (${res.timedOut ? "scaduto" : "flusso chiuso"})`, secs()];
+  if (res.judgeAt === null) return [false, "nessun evento phase del giudice nel flusso", secs()];
+  if (res.maxGap > HEARTBEAT_MAX_S)
+    return [false, `DIFETTO: flusso muto ${res.maxGap.toFixed(1)} s durante il giudice (${res.comments} heartbeat; il motore non manda commenti SSE)`, secs()];
+  return [true, `silenzio massimo ${res.maxGap.toFixed(1)} s, ${res.comments} heartbeat`, secs()];
+};
+
 const DESCR = {
+  y: "riavvio con dibattito running → interrupted", z: "SSE vivo durante il giudice lento",
   r: "corpo spezzato e corpi non-oggetto", s: "eliminazione a dibattito in corso", t: "SSE: ricollegamento a metà",
   u: "riga del titolo", v: "giudice con verdetto vuoto",
   w: "chiavi dall'app: provider, Claude CLI, log", x: "hello con chiavi ostili",
