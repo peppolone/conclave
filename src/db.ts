@@ -46,13 +46,13 @@ db.exec(`
 // Migrazione per DB esistenti: aggiunge le colonne mancanti.
 {
   const cols = new Set((db.prepare(`PRAGMA table_info(debates)`).all() as { name: string }[]).map((c) => c.name));
-  const add: [string, string][] = [["options", "TEXT"], ["parent_id", "INTEGER"], ["finished_at", "TEXT"], ["title", "TEXT"], ["updated_at", "TEXT"]];
+  const add: [string, string][] = [["options", "TEXT"], ["parent_id", "INTEGER"], ["finished_at", "TEXT"], ["title", "TEXT"], ["updated_at", "TEXT"], ["confidence", "TEXT"]];
   for (const [name, type] of add) if (!cols.has(name)) db.exec(`ALTER TABLE debates ADD COLUMN ${name} ${type}`);
   // Ultima attività (turno nuovo): ordina la cronologia. Le discussioni vecchie partono dalla creazione.
   db.exec(`UPDATE debates SET updated_at = created_at WHERE updated_at IS NULL`);
   // Modello che ha risposto davvero e quello che ha sostituito (riserve della stessa famiglia).
   const mcols = new Set((db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[]).map((c) => c.name));
-  for (const name of ["model_used", "replaced"]) if (!mcols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} TEXT`);
+  for (const name of ["model_used", "replaced", "confidence"]) if (!mcols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} TEXT`);
   // Turni della chat continua: 0 = il dibattito originale (anche per tutte le righe già esistenti).
   if (!mcols.has("turn")) db.exec(`ALTER TABLE messages ADD COLUMN turn INTEGER NOT NULL DEFAULT 0`);
   const acols = new Set((db.prepare(`PRAGMA table_info(attachments)`).all() as { name: string }[]).map((c) => c.name));
@@ -69,6 +69,8 @@ export interface MessageRow {
   ms: number | null;
   model_used?: string | null;
   replaced?: string | null;
+  /** Solo nei messaggi del verdetto: "alta" | "media" | "bassa" | null (riga AFFIDABILITÀ del giudice). */
+  confidence?: string | null;
   /** Turno della chat (0 = dibattito originale). */
   turn?: number;
 }
@@ -89,9 +91,9 @@ export function createDebate(question: string, models: string[], options: Stored
 
 export function saveMessage(debateId: number, m: MessageRow): void {
   // Solo se il dibattito esiste ancora: una risposta arrivata dopo l'eliminazione non lascia righe orfane.
-  db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms, model_used, replaced, turn)
-              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM debates WHERE id = ?)`)
-    .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null, m.turn ?? 0, debateId);
+  db.prepare(`INSERT INTO messages (debate_id, model_id, phase, content, error, ms, model_used, replaced, turn, confidence)
+              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM debates WHERE id = ?)`)
+    .run(debateId, m.model_id, m.phase, m.content, m.error, m.ms, m.model_used ?? null, m.replaced ?? null, m.turn ?? 0, m.confidence ?? null, debateId);
 }
 
 export function saveAttachments(debateId: number, list: { name: string; kind: string; text: string }[], turn = 0): void {
@@ -134,12 +136,12 @@ export function finishTurn(id: number, status: string): void {
   db.prepare(`UPDATE debates SET status = ?, finished_at = datetime('now') WHERE id = ?`).run(status, id);
 }
 
-export function finishDebate(id: number, status: string, verdict: string | null, title: string | null = null): void {
-  db.prepare(`UPDATE debates SET status = ?, verdict = ?, title = ?, finished_at = datetime('now') WHERE id = ?`).run(status, verdict, title, id);
+export function finishDebate(id: number, status: string, verdict: string | null, title: string | null = null, confidence: string | null = null): void {
+  db.prepare(`UPDATE debates SET status = ?, verdict = ?, title = ?, confidence = ?, finished_at = datetime('now') WHERE id = ?`).run(status, verdict, title, confidence, id);
 }
 
 export function listDebates(limit = 50, q?: string) {
-  const cols = `id, question, title, status, created_at, parent_id, finished_at, updated_at`;
+  const cols = `id, question, title, status, created_at, parent_id, finished_at, updated_at, confidence`;
   // Ultima attività prima: una discussione con un turno nuovo sale in cima.
   const order = `ORDER BY updated_at DESC, id DESC`;
   const term = q?.trim();
@@ -156,11 +158,11 @@ export function getDebate(id: number) {
   const d = db.prepare(`SELECT * FROM debates WHERE id = ?`).get(id) as
     | {
         id: number; question: string; title: string | null; models: string; status: string; verdict: string | null; created_at: string;
-        options: string | null; parent_id: number | null; finished_at: string | null; updated_at: string | null;
+        options: string | null; parent_id: number | null; finished_at: string | null; updated_at: string | null; confidence: string | null;
       }
     | undefined;
   if (!d) return undefined;
-  const messages = db.prepare(`SELECT model_id, phase, content, error, ms, model_used, replaced, turn FROM messages WHERE debate_id = ? ORDER BY turn, id`).all(id) as unknown as MessageRow[];
+  const messages = db.prepare(`SELECT model_id, phase, content, error, ms, model_used, replaced, turn, confidence FROM messages WHERE debate_id = ? ORDER BY turn, id`).all(id) as unknown as MessageRow[];
   let options: StoredOptions | null = null;
   try { options = d.options ? (JSON.parse(d.options) as StoredOptions) : null; } catch { /* valore rovinato */ }
   return { ...d, models: JSON.parse(d.models) as string[], options, messages };
@@ -170,4 +172,31 @@ export function deleteDebate(id: number): void {
   db.prepare(`DELETE FROM messages WHERE debate_id = ?`).run(id);
   db.prepare(`DELETE FROM attachments WHERE debate_id = ?`).run(id);
   db.prepare(`DELETE FROM debates WHERE id = ?`).run(id);
+}
+
+const MEDIAN_SAMPLES = 20;
+/** Chiave dei verdetti in `medianMsByModel` (non può essere un id di modello). */
+export const JUDGE_KEY = "\u0000judge";
+
+/**
+ * Tempo di risposta tipico: mediana degli ultimi 20 `ms` riusciti per ogni model_id (una sola query).
+ * Esclude note, metadati, domande, ricerca ed errori; i verdetti (`judge:*`) vanno tutti sotto JUDGE_KEY.
+ */
+export function medianMsByModel(): Map<string, number> {
+  const rows = db.prepare(`
+    SELECT k, ms FROM (
+      SELECT CASE WHEN phase = 'verdict' THEN ? ELSE model_id END AS k, ms,
+             ROW_NUMBER() OVER (PARTITION BY CASE WHEN phase = 'verdict' THEN ? ELSE model_id END ORDER BY id DESC) AS rn
+      FROM messages
+      WHERE ms IS NOT NULL AND ms >= 0 AND error IS NULL AND content IS NOT NULL
+        AND substr(model_id, 1, 1) <> '_' AND model_id NOT LIKE 'research%'
+    ) WHERE rn <= ?`).all(JUDGE_KEY, JUDGE_KEY, MEDIAN_SAMPLES) as { k: string; ms: number }[];
+  const by = new Map<string, number[]>();
+  for (const r of rows) (by.get(r.k) ?? by.set(r.k, []).get(r.k)!).push(Number(r.ms));
+  const out = new Map<string, number>();
+  for (const [k, v] of by) {
+    v.sort((a, b) => a - b);
+    out.set(k, Math.round(v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2));
+  }
+  return out;
 }

@@ -1506,6 +1506,94 @@ const DESCR = {
   as: "chat: ricerca trova le domande di seguito",
   at: "chat: seguito senza verdetto (posizioni)", au: "chat: turno oltre il timer di pulizia",
   av: "chat: ricerca sul web in un turno",
+  ax: "riga AFFIDABILITÀ (unità)", ay: "confidenza salvata, restituita e nel prompt del giudice",
+  az: "giudice senza riga e tempi medi",
+};
+
+// ---------- verdetto breve: riga AFFIDABILITÀ e tempi medi ----------
+
+// splitConfidence (unità): riga assente, tradotta, con markdown, prima o dopo TITOLO, valori tradotti.
+SCENARIOS.ax = async function ax() {
+  const { splitConfidence, splitTitle } = await import("../../src/debate/prompts.ts");
+  const cases = [
+    ["AFFIDABILITÀ: alta\n## Risposta\nTesto", "alta", "## Risposta\nTesto"],
+    ["Nessuna riga.\n## Risposta\nTesto", null, "Nessuna riga.\n## Risposta\nTesto"],
+    ["RELIABILITY: High\nTesto", "alta", "Testo"],
+    ["**CONFIDENCE:** medium\nTesto", "media", "Testo"],
+    ["**CONFIDENCE**: Low\nTesto", "bassa", "Testo"],
+    ["## FIABILIDAD: Baja\nTesto", "bassa", "Testo"],
+    ["> AFFIDABILITÀ: **Media**\nTesto", "media", "Testo"],
+    ["FIABILITÉ: élevée\nTesto", "alta", "Testo"],
+    ["AFFIDABILITA: BASSA\nTesto", "bassa", "Testo"],
+    ["AFFIDABILITÀ: boh\nTesto", null, "Testo"],
+    ["AFFIDABILITÀ:\n## Risposta\nTesto", null, "## Risposta\nTesto"],
+    ["## Affidabilità\nalta, perché…", null, "## Affidabilità\nalta, perché…"],
+    [`${"x".repeat(500)}\nAFFIDABILITÀ: alta\nTesto`, null, `${"x".repeat(500)}\nAFFIDABILITÀ: alta\nTesto`],
+  ];
+  const wrong = cases.filter(([input, conf, verdict]) => {
+    const r = splitConfidence(input);
+    return r.confidence !== conf || r.verdict !== verdict;
+  }).map(([input]) => JSON.stringify(input.slice(0, 30)));
+  // Insieme al titolo, in entrambi gli ordini.
+  for (const input of ["TITOLO: Treno\nAFFIDABILITÀ: media\n## Risposta\nTesto", "AFFIDABILITÀ: media\nTITOLO: Treno\n## Risposta\nTesto"]) {
+    const t = splitTitle(input);
+    const c = splitConfidence(t.verdict);
+    if (t.title !== "Treno" || c.confidence !== "media" || c.verdict !== "## Risposta\nTesto") wrong.push(`titolo+affidabilità ${JSON.stringify(input.slice(0, 20))}`);
+  }
+  if (wrong.length) return [false, `casi sbagliati: ${wrong.slice(0, 4).join(", ")}`, 0];
+  return [true, `${cases.length + 2} casi di affidabilità corretti`, 0];
+};
+
+// Confidenza: salvata e restituita in done, GET, lista e messaggio del verdetto; nel turno council sul
+// messaggio del verdetto del turno (la discussione resta invariata); il prompt del giudice ha le risposte iniziali.
+SCENARIOS.ay = async function ay() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const r = await debate("conv-conf", ["ok-a", "ok-b"], 1, "ok-a", 60_000);
+  const bad = expectDone(r, 60);
+  if (bad) return [false, bad, secs()];
+  const wrong = [];
+  const done = doneEvent(r.events);
+  if (done?.confidence !== "alta") wrong.push(`done.confidence ${JSON.stringify(done?.confidence)}`);
+  if (r.state?.confidence !== "alta") wrong.push(`GET confidence ${JSON.stringify(r.state?.confidence)}`);
+  if (/AFFIDABILIT/.test(r.state?.verdict ?? "") || /AFFIDABILIT/.test(done?.verdict ?? "")) wrong.push("la riga è rimasta nel verdetto");
+  const vm = (r.state?.messages ?? []).find((m) => m.phase === "verdict" && m.content);
+  if (vm?.confidence !== "alta") wrong.push("confidence non nel messaggio del verdetto");
+  const list = (await api("GET", "/api/debates")).body;
+  if (list?.find?.((d) => d.id === r.id)?.confidence !== "alta") wrong.push("confidence non nella lista");
+  const jp = (await promptsOf("conv-conf")).find((p) => p.phase === "verdict");
+  if (!jp?.user.includes("RISPOSTE INIZIALI") || !jp.user.includes("del modello ok-a") || !jp.user.includes("del modello ok-b")) wrong.push("prompt del giudice senza risposte iniziali");
+  if (!jp?.user.includes("AFFIDABILITÀ: alta | media | bassa") || !jp.user.includes("## Dove divergono")) wrong.push("prompt del giudice senza la nuova struttura");
+  const t = await turnOf(r.id, { question: FQ("conv-conf", "E per Napoli?"), mode: "council", models: ["ok-a", "ok-b"], rounds: 0, judge: "ok-b" }, 120_000);
+  if (t.state?.status !== "done") return [false, `turno council: ${t.post.status} ${t.state?.status}`, secs()];
+  if (doneEvent(t.events)?.confidence !== "alta") wrong.push("done del turno senza confidence");
+  if (turnMsgs(t.state, 1).find((m) => m.phase === "verdict" && m.content)?.confidence !== "alta") wrong.push("confidence non nel verdetto del turno");
+  if (t.state?.confidence !== "alta" || t.state?.verdict !== r.state.verdict) wrong.push("discussione cambiata dal turno");
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, "confidenza in done, GET, lista, messaggio e turno council; giudice con risposte iniziali", secs()];
+};
+
+// Giudice senza riga (null, nessun errore) o con riga tradotta/in grassetto; avgMs null senza dati e
+// valorizzato dopo un dibattito.
+SCENARIOS.az = async function az() {
+  const started = Date.now();
+  const secs = () => (Date.now() - started) / 1000;
+  const m0 = (await api("GET", "/api/models")).body;
+  const never = m0?.models?.find((m) => m.id === "badkey");
+  if (!never || !("avgMs" in never) || never.avgMs !== null) return [false, `avgMs di un modello senza risposte: ${JSON.stringify(never?.avgMs)}`, secs()];
+  const n = await baseDebate("conv-noconf");
+  const c = await baseDebate("conv-confmd");
+  const wrong = [];
+  const dn = doneEvent(n.events);
+  if (dn?.status !== "done" || !("confidence" in dn) || dn.confidence !== null) wrong.push(`senza riga: ${JSON.stringify(dn?.confidence)}`);
+  if (n.state?.confidence !== null || !n.state?.verdict) wrong.push("senza riga: GET");
+  if (doneEvent(c.events)?.confidence !== "alta" || c.state?.confidence !== "alta" || /CONFIDENCE/.test(c.state?.verdict ?? "")) wrong.push("riga tradotta in grassetto");
+  const m1 = (await api("GET", "/api/models")).body;
+  const ok = m1?.models?.find((m) => m.id === "ok-a");
+  if (typeof ok?.avgMs !== "number" || ok.avgMs < 0) wrong.push(`avgMs ok-a ${JSON.stringify(ok?.avgMs)}`);
+  if (typeof m1?.judgeAvgMs !== "number") wrong.push(`judgeAvgMs ${JSON.stringify(m1?.judgeAvgMs)}`);
+  if (wrong.length) return [false, wrong.slice(0, 4).join("; "), secs()];
+  return [true, "riga assente → null senza errori, riga tradotta letta, avgMs null/valorizzato, judgeAvgMs", secs()];
 };
 
 // ---------- main ----------

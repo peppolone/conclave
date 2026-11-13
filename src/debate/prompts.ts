@@ -27,6 +27,7 @@ ${LANG} Traduci nella lingua della domanda anche i titoli delle sezioni del verd
 
 export type Labeled = { label: string; text: string };
 
+const INITIAL_EXCERPT_MAX = 1000;
 const block = (items: Labeled[]) => items.map((i) => `### Risposta ${i.label}\n${clip(i.text)}`).join("\n\n");
 
 export type ParentContext = { question: string; verdict: string };
@@ -143,28 +144,33 @@ Chiudi con una riga esattamente in questo formato (la parola FIDUCIA e i valori 
 FIDUCIA: alta | media | bassa`;
 }
 
-export function judgePrompt(question: string, finals: Labeled[], critiques: Labeled[], parent?: ParentContext, m?: Material): string {
+export function judgePrompt(question: string, finals: Labeled[], critiques: Labeled[], parent?: ParentContext, m?: Material, initials: Labeled[] = []): string {
   const crit = critiques.length
     ? `\n\nCRITICHE EMERSE NEL DIBATTITO (estratto):\n${block(critiques.map((c) => ({ ...c, text: c.text.slice(0, 1500) })))}`
     : "";
+  // Estratto delle risposte iniziali: serve al giudice per vedere chi ha cambiato posizione.
+  const init = initials.length
+    ? `\n\nRISPOSTE INIZIALI (estratto, per vedere chi ha cambiato posizione):\n${initials.map((i) => `### Risposta ${i.label}\n${i.text.slice(0, INITIAL_EXCERPT_MAX)}`).join("\n\n")}`
+    : "";
   // Nei turni ≥ 1 il titolo della discussione non cambia: niente riga TITOLO.
-  const titleLine = m?.followup ? "Produci il verdetto sulla NUOVA DOMANDA con queste sezioni:" : `Inizia con una riga esattamente in questo formato (la parola TITOLO resta in italiano, il titolo è nella lingua della domanda):
+  const titleLine = m?.followup ? "Produci il verdetto sulla NUOVA DOMANDA così:\n" : `Inizia con una riga esattamente in questo formato (la parola TITOLO resta in italiano, il titolo è nella lingua della domanda):
 TITOLO: titolo breve della discussione, al massimo 6 parole, senza virgolette né punto finale
-Poi produci il verdetto con queste sezioni:`;
+`;
   return `${contextBlock(parent)}${m?.followup ? head(m) : "DOMANDA ORIGINALE:"}\n${question}${attachmentsBlock(m)}${researchBlock(m)}
 
-POSIZIONI FINALI DEI MEMBRI:\n${block(finals)}${crit}
+POSIZIONI FINALI DEI MEMBRI:\n${block(finals)}${init}${crit}
 
-${titleLine}
+${titleLine}Poi una riga esattamente in questo formato (la parola AFFIDABILITÀ e i valori restano in italiano, qualunque sia la lingua della domanda):
+AFFIDABILITÀ: alta | media | bassa
+Poi queste sezioni, con i titoli tradotti nella lingua della domanda:
 ## Risposta
-La risposta migliore alla domanda, completa e autonoma, scritta per chi ha fatto la domanda (non citare le lettere qui). Puoi combinare elementi di più posizioni; se nessuna è convincente, dillo e dai la tua.
-## Su cosa concordano
-## Errori emersi nel dibattito
-Cita la lettera della risposta che li conteneva.
-## Disaccordi irrisolti
-Per ciascuno, quale posizione è più solida e perché.
-## Affidabilità
-alta / media / bassa, con il motivo e cosa servirebbe verificare.`;
+In 2–3 frasi la risposta diretta, scritta per chi ha fatto la domanda (non citare le lettere qui); poi, solo se serve, i dettagli in punti brevi. Puoi combinare elementi di più posizioni; se nessuna è convincente, dillo e dai la tua.
+## Dove divergono
+Una tabella Markdown con le colonne | Punto | A | B | C … | (una colonna per ogni risposta) e la posizione di ciascuna in al massimo 8 parole per cella. Metti "↻" davanti alla posizione di chi ha cambiato idea durante il dibattito. Se concordano su tutto, una sola riga che lo dice, senza tabella.
+## Da verificare
+Affermazioni incerte o sostenute da una sola risposta, con la lettera. Se c'è la ricerca sul web, i link delle fonti.
+## Perché questa risposta
+Motivazione breve: gli argomenti decisivi, gli errori emersi (con la lettera della risposta che li conteneva), cosa ha fatto cambiare idea e quali disaccordi restano.`;
 }
 
 // ---- Chat continua: turni dopo il verdetto ----
@@ -266,4 +272,31 @@ export function splitTitle(text: string): { title: string | null; verdict: strin
   const title = m[1].replace(/^["'«“#\s]+|["'»”.\s]+$/g, "").slice(0, 80) || null;
   const verdict = (text.slice(0, m.index) + text.slice(m.index! + m[0].length)).replace(/^\s+/, "");
   return { title, verdict };
+}
+
+export type Confidence = "alta" | "media" | "bassa" | null;
+
+/** Valori della riga AFFIDABILITÀ (anche tradotti) → italiano. Il primo che inizia la parola vince. */
+const CONFIDENCE_WORDS: [RegExp, "alta" | "media" | "bassa"][] = [
+  [/^(alta|alto|high|elevee|elevata|haute|forte|hoch|grande|alt)\b/, "alta"],
+  [/^(media|medio|medium|moderate|moderata|moyenne|moyen|mittel|mitjana|moderada|mid)\b/, "media"],
+  [/^(bassa|basso|low|faible|baja|bajo|baixa|baixo|niedrig|gering|bas)\b/, "bassa"],
+];
+
+/**
+ * Toglie dal verdetto la riga macchina "AFFIDABILITÀ: alta | media | bassa" (anche RELIABILITY,
+ * CONFIDENCE, FIABILIDAD… con ** o # intorno, prima o dopo TITOLO) e restituisce il valore in italiano.
+ * Riga assente o valore non riconosciuto: confidence null (la riga, se c'è, si toglie comunque).
+ */
+export function splitConfidence(text: string): { confidence: Confidence; verdict: string } {
+  const key = "AFFIDABILIT[ÀA]'?|RELIABILITY|CONFIDENCE|FIABILIDAD|FIABILIT[ÉE]|CONFIANCE|CONFIANZA|CONFIAN[ÇC]A|ZUVERL[ÄA]SSIGKEIT";
+  const re = new RegExp(`^[ \\t]*[#>]*[ \\t]*\\**[ \\t]*(?:${key})[ \\t]*\\**[ \\t]*:[ \\t]*\\**[ \\t]*(.*?)[ \\t]*\\**[ \\t]*$`, "im");
+  const m = text.match(re);
+  // Solo in testa (come il titolo) e breve: una frase "Affidabilità: …" nel corpo non è la riga macchina.
+  if (!m || m.index! > 400 || m[1].length > 40) return { confidence: null, verdict: text };
+  const word = m[1].normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/^[^a-z]+/, "");
+  const confidence = CONFIDENCE_WORDS.find(([r]) => r.test(word))?.[1] ?? null;
+  const end = m.index! + m[0].length;
+  const verdict = (text.slice(0, m.index) + text.slice(text[end] === "\n" ? end + 1 : end)).replace(/^\s+/, "");
+  return { confidence, verdict };
 }

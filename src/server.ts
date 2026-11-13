@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { config, isAvailable, findModel, PORT, selection, validateSelection, saveSelection, type ModelDef } from "./config.ts";
-import { createDebate, listDebates, getDebate, deleteDebate, saveAttachments, saveMessage, nextTurn, hasTurnZeroContent, startTurn } from "./db.ts";
+import { medianMsByModel, JUDGE_KEY, createDebate, listDebates, getDebate, deleteDebate, saveAttachments, saveMessage, nextTurn, hasTurnZeroContent, startTurn } from "./db.ts";
 import { runDebate, runQuickAnswer, type DebateEvent, type Rounds } from "./debate/orchestrator.ts";
 import { buildConversation } from "./debate/followup.ts";
 import type { Attachment } from "./debate/prompts.ts";
@@ -243,6 +243,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (req.method === "GET" && path === "/api/models") {
     const researcher = findResearcher();
+    const medians = medianMsByModel();
     return json(res, 200, {
       judge: config.judge.label,
       native: process.env.COUNCIL_PARENT === "app",
@@ -251,8 +252,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       defaults: { rounds: DEFAULT_ROUNDS, judge: DEFAULT_JUDGE, claudeModel: config.judge.model },
       models: config.models.map((m) => ({
         id: m.id, label: m.label, default: !!m.default, available: isAvailable(m),
-        provider: m.provider ?? "abbonamento", model: m.model, health: getHealth(m.id),
+        provider: m.provider ?? "abbonamento", model: m.model, health: getHealth(m.id), avgMs: medians.get(m.id) ?? null,
       })),
+      // Tempi tipici (mediana degli ultimi 20 riusciti): null se non ci sono dati.
+      judgeAvgMs: medians.get(JUDGE_KEY) ?? null,
       webSearch: { available: researcher !== null, via: researcher?.via ?? null },
     });
   }

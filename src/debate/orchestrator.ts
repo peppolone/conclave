@@ -39,9 +39,9 @@ export type DebateEvent = (
       parentId: number | null;
     }
   | { type: "phase"; phase: Phase; note?: string }
-  | { type: "message"; phase: Phase; modelId: string; text: string; ms: number; model?: string; replaced?: string }
+  | { type: "message"; phase: Phase; modelId: string; text: string; ms: number; model?: string; replaced?: string; confidence?: "alta" | "media" | "bassa" | null }
   | { type: "error"; phase: Phase; modelId: string; error: string }
-  | { type: "done"; status: "done" | "failed" | "cancelled"; verdict?: string; title?: string; error?: string }
+  | { type: "done"; status: "done" | "failed" | "cancelled"; verdict?: string; title?: string; confidence?: "alta" | "media" | "bassa" | null; error?: string }
   | { type: "turn"; question: string; mode: "quick" | "council" }
 ) & { turn?: number };
 
@@ -156,8 +156,8 @@ export async function researchPhase(ctx: TurnCtx, question: string, claudeModel:
 }
 
 /** Esito finale di un turno: il turno 0 scrive verdetto e titolo, gli altri solo lo stato. */
-function finish(ctx: TurnCtx, status: "done" | "failed" | "cancelled", verdict: string | null, title: string | null = null) {
-  if (ctx.turn === 0) finishDebate(ctx.debateId, status, verdict, title);
+function finish(ctx: TurnCtx, status: "done" | "failed" | "cancelled", verdict: string | null, title: string | null = null, confidence: string | null = null) {
+  if (ctx.turn === 0) finishDebate(ctx.debateId, status, verdict, title, confidence);
   else finishTurn(ctx.debateId, status);
 }
 
@@ -297,27 +297,33 @@ export async function runDebate(
     // (es. se Claude ha raggiunto il limite Pro).
     emit({ type: "phase", phase: "verdict" });
     const judges = chainOf(chosenJudge, alive().map((d) => d.def), opts.claudeModel);
-    const judgeUser = P.judgePrompt(question, finals, critiques, parent, material);
+    const initials = ds.filter((d) => d.initial).map((d) => ({ label: d.letter, text: d.initial! }));
+    const judgeUser = P.judgePrompt(question, finals, critiques, parent, material, initials);
     let verdict: string | undefined;
     let title: string | null = null;
+    let confidence: P.Confidence = null;
     await firstInChain(judges, ctx, async (j, budget) => {
       const r = await chat(j, { system: P.SYSTEM_JUDGE, user: judgeUser, maxTokens: 8192, signal: budget });
+      // Riga TITOLO e riga AFFIDABILITÀ in qualunque ordine: si tolgono entrambe dal verdetto.
       const split = P.splitTitle(r.text);
+      const conf = P.splitConfidence(split.verdict);
+      split.verdict = conf.verdict;
       // Solo la riga del titolo, niente verdetto: si prova il giudice successivo.
       if (!split.verdict.trim()) throw new Error("verdetto vuoto");
       // Nei turni ≥ 1 il titolo della discussione non cambia.
       title = turn === 0 ? split.title : null;
+      confidence = conf.confidence;
       verdict = j.id === chosenJudge.id ? split.verdict : `> Giudice di riserva: ${j.label} (${chosenJudge.label} non disponibile)\n\n${split.verdict}`;
-      save(ctx, { model_id: `judge:${j.id}`, phase: "verdict", content: verdict, error: null, ms: r.ms });
-      emit({ type: "message", phase: "verdict", modelId: `judge:${j.id}`, text: verdict, ms: r.ms });
+      save(ctx, { model_id: `judge:${j.id}`, phase: "verdict", content: verdict, error: null, ms: r.ms, confidence });
+      emit({ type: "message", phase: "verdict", modelId: `judge:${j.id}`, text: verdict, ms: r.ms, confidence });
     }, (j, error) => {
       save(ctx, { model_id: `judge:${j.id}`, phase: "verdict", content: null, error, ms: null });
       emit({ type: "error", phase: "verdict", modelId: `judge:${j.id}`, error });
     });
     if (!verdict) throw new Error("Nessun giudice ha prodotto il verdetto.");
 
-    finish(ctx, "done", verdict, title);
-    emit({ type: "done", status: "done", verdict, ...(title ? { title } : {}) });
+    finish(ctx, "done", verdict, title, confidence);
+    emit({ type: "done", status: "done", verdict, ...(title ? { title } : {}), confidence });
   } catch (e) {
     const cancelled = signal.aborted;
     const error = cancelled ? (turn > 0 ? "Turno annullato" : "Dibattito annullato") : redact((e as Error).message);

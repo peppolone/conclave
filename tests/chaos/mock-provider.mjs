@@ -65,6 +65,13 @@ function okText(model, user) {
   if (user.includes("Round 3")) t += "\n\nFIDUCIA: media";
   // Turni della chat continua: ripete la prima riga della nuova domanda, così le prove vedono
   // quali risposte dei turni precedenti finiscono nel contesto.
+  // Giudice: come il vero, apre con la riga macchina AFFIDABILITÀ ("noconf" nell'etichetta = la dimentica,
+  // "confmd" = la scrive tradotta e in grassetto).
+  if (user.includes("POSIZIONI FINALI DEI MEMBRI")) {
+    const sc = scenarioOf(user);
+    if (sc.includes("confmd")) t = `**CONFIDENCE:** High\n\n${t}`;
+    else if (!sc.includes("noconf")) t = `AFFIDABILITÀ: alta\n\n${t}`;
+  }
   const nq = user.split("NUOVA DOMANDA:\n").at(-1);
   if (nq !== user) t += `\n\nECO[${nq.split("\n")[0].slice(0, 120)}]`;
   return t;
