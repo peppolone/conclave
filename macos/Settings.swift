@@ -377,6 +377,29 @@ final class SettingsModel: ObservableObject {
     }
 }
 
+/// Stato dell'interfaccia delle pagine: le pagine si ricreano a ogni cambio di voce nella barra
+/// laterale e i loro `@State` ripartirebbero da capo. Vive quanto la finestra; si azzera solo
+/// quando le Impostazioni si riaprono (insieme al ricaricamento dei dati).
+@MainActor
+final class SettingsPageState: ObservableObject {
+    @Published var shownKeys: Set<String> = []        // provider con la chiave in chiaro
+    @Published var guideOpen: [String: Bool] = [:]    // provider → guida aperta (nil = predefinito)
+    @Published var loginError: String?                // pagina Generale
+    @Published var keysError: String?                 // pagina Chiavi API
+    @Published var modelsError: String?               // pagina Modelli
+    @Published var modelsSaving = false
+    @Published var modelsExpanded: Set<String> = []
+
+    func reset() {
+        shownKeys = []
+        guideOpen = [:]
+        loginError = nil
+        keysError = nil
+        modelsError = nil
+        modelsExpanded = []
+    }
+}
+
 // MARK: - Interfaccia: pannello Chiavi API
 
 /// Esito di una verifica: simbolo colorato + testo leggibile (lo stato non dipende dal colore).
@@ -548,7 +571,7 @@ struct GeneralPage: View {
     @State private var appearance = AppAppearance.current
     @State private var language = AppLanguage.current
     @State private var openAtLogin = LoginItem.enabled || LoginItem.needsApproval
-    @State private var loginError: String?
+    @ObservedObject var ui: SettingsPageState
     @State private var menuBar = MenuBarPreference.enabled
     @AppStorage(UpdateCheck.enabledKey) private var updates = true
 
@@ -561,7 +584,7 @@ struct GeneralPage: View {
     }
 
     private var loginDetail: String {
-        if let loginError { return loginError }
+        if let loginError = ui.loginError { return loginError }
         if LoginItem.needsApproval { return L("Da approvare in Impostazioni di Sistema ▸ Generali ▸ Elementi di login.") }
         return L("Conclave si apre da solo quando accedi al Mac.")
     }
@@ -629,9 +652,9 @@ struct GeneralPage: View {
             guard on != (LoginItem.enabled || LoginItem.needsApproval) else { return }
             do {
                 try LoginItem.set(on)
-                loginError = nil
+                ui.loginError = nil
             } catch {
-                loginError = L("Non è stato possibile cambiare l'apertura all'accesso:") + " " + error.localizedDescription
+                ui.loginError = L("Non è stato possibile cambiare l'apertura all'accesso:") + " " + error.localizedDescription
                 openAtLogin = LoginItem.enabled || LoginItem.needsApproval
             }
         }
@@ -643,14 +666,18 @@ struct GeneralPage: View {
 struct ProviderSection: View {
     let guide: ProviderGuide
     @ObservedObject var model: SettingsModel
-    @State private var showKey = false
-    @State private var guideOpen: Bool
+    @ObservedObject var ui: SettingsPageState
 
-    init(guide: ProviderGuide, model: SettingsModel) {
-        self.guide = guide
-        self.model = model
-        // Guida aperta solo se manca la chiave di un provider gratuito principale.
-        _guideOpen = State(initialValue: !model.hasKey(guide.id) && !guide.optional)
+    private var showKey: Bool {
+        get { ui.shownKeys.contains(guide.id) }
+        nonmutating set { if newValue { ui.shownKeys.insert(guide.id) } else { ui.shownKeys.remove(guide.id) } }
+    }
+
+    /// Guida aperta in partenza solo se manca la chiave di un provider gratuito principale;
+    /// poi vale la scelta dell'utente, che resta anche cambiando pagina.
+    private var guideOpen: Binding<Bool> {
+        Binding(get: { ui.guideOpen[guide.id] ?? (!model.hasKey(guide.id) && !guide.optional) },
+                set: { ui.guideOpen[guide.id] = $0 })
     }
 
     private var test: TestState { model.tests[guide.id] ?? .idle }
@@ -698,7 +725,7 @@ struct ProviderSection: View {
 
             if test != .idle { TestResultView(state: test) }
 
-            DisclosureGroup("Come ottenere la chiave", isExpanded: $guideOpen) {
+            DisclosureGroup("Come ottenere la chiave", isExpanded: guideOpen) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(guide.steps.enumerated()), id: \.offset) { i, step in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -721,8 +748,8 @@ struct ProviderSection: View {
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
+    @ObservedObject var ui: SettingsPageState
     var close: () -> Void
-    @State private var error: String?
     @AppStorage("SettingsShowOtherProviders") private var showOthers = false
 
     private var available: [ProviderGuide] { providerGuides.filter { model.providers[$0.id] != nil } }
@@ -750,7 +777,7 @@ struct SettingsView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Brand.hairline))
                 .accessibilityElement(children: .combine)
 
-                ForEach(main) { g in ProviderSection(guide: g, model: model) }
+                ForEach(main) { g in ProviderSection(guide: g, model: model, ui: ui) }
 
                 if !others.isEmpty {
                     SettingsSection(L("Altri provider"), footer: L("Facoltativi: servono solo se vuoi altre voci. OpenAI è l'unico a pagamento.")) {
@@ -761,7 +788,7 @@ struct SettingsView: View {
                         }
                     }
                     if showOthers || others.contains(where: { model.hasKey($0.id) }) {
-                        ForEach(others) { g in ProviderSection(guide: g, model: model) }
+                        ForEach(others) { g in ProviderSection(guide: g, model: model, ui: ui) }
                     }
                 }
 
@@ -773,14 +800,14 @@ struct SettingsView: View {
             SettingsBar {
                 Text(String(format: L("%d di %d provider configurati"), model.configuredCount, model.providers.count))
                     .foregroundStyle(.secondary)
-                if let error {
+                if let error = ui.keysError {
                     Text(error).foregroundStyle(Brand.danger).lineLimit(1).textSelection(.enabled)
                 }
                 Spacer()
                 // Senza Esc: nei campi Esc deve solo annullare la modifica, non chiudere e perdere tutto.
                 Button("Annulla") { model.reload(); close() }
                 Button("Salva e attiva") {
-                    do { try model.save(); close() } catch { self.error = error.localizedDescription }
+                    do { try model.save(); ui.keysError = nil; close() } catch { ui.keysError = error.localizedDescription }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.dirty)
@@ -935,14 +962,15 @@ struct SettingsDetail: View {
     @ObservedObject var nav: SettingsNav
     let keys: SettingsModel
     let models: ModelsModel
+    let ui: SettingsPageState
     let close: () -> Void
 
     var body: some View {
         Group {
             switch nav.tab {
-            case .general: GeneralPage()
-            case .keys: SettingsView(model: keys, close: close)
-            case .models: ModelsTab(model: models, close: close)
+            case .general: GeneralPage(ui: ui)
+            case .keys: SettingsView(model: keys, ui: ui, close: close)
+            case .models: ModelsTab(model: models, ui: ui, close: close)
             case .about: AboutPage()
             }
         }
@@ -959,21 +987,25 @@ let settingsWindowSize = CGSize(width: 820, height: 600)
 private let settingsSidebarWidth: CGFloat = 200
 
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let nav = SettingsNav()
+    private let ui = SettingsPageState()
     let model = SettingsModel()
     let models: ModelsModel
 
     init(port: @escaping () -> Int) {
         models = ModelsModel(port: port)
+        super.init()
     }
 
     private func makeWindow() -> NSWindow {
-        let close: () -> Void = { [weak self] in self?.window?.close() }
+        // performClose passa da windowShouldClose: dopo "Salva e attiva" in una pagina si chiede
+        // comunque delle modifiche non salvate nell'altra.
+        let close: () -> Void = { [weak self] in self?.window?.performClose(nil) }
 
         let sidebarVC = NSHostingController(rootView: SettingsSidebar(nav: nav).rebuildOnAppearanceChange())
-        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, close: close).rebuildOnAppearanceChange())
+        let detailVC = NSHostingController(rootView: SettingsDetail(nav: nav, keys: model, models: models, ui: ui, close: close).rebuildOnAppearanceChange())
         // Solo il vincolo di dimensione massima: con [] la vista SwiftUI resta fuori da Auto Layout
         // e alla prima apertura gli interruttori comparivano senza pomello; con il predefinito
         // .standardBounds (anche minimo e dimensione ideale) la pagina Modelli allargava la finestra.
@@ -996,6 +1028,7 @@ final class SettingsWindowController {
                          styleMask: [.titled, .closable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         w.title = L("Impostazioni")
+        w.delegate = self
         // Sfondo di marchio sotto tutta la finestra, come nella finestra principale.
         let root = NSViewController()
         root.view = NSView()
@@ -1025,6 +1058,66 @@ final class SettingsWindowController {
         return w
     }
 
+    // MARK: Chiusura con modifiche non salvate
+
+    /// Come nei documenti delle app Mac: chiudendo con modifiche si chiede se salvarle.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard model.dirty || models.dirty else { return true }
+        guard sender.attachedSheet == nil else { return false }
+        let alert = NSAlert()
+        alert.messageText = L("Vuoi salvare le modifiche alle Impostazioni?")
+        alert.informativeText = L("Se non le salvi, le modifiche andranno perse.")
+        alert.addButton(withTitle: L("Salva"))
+        let discard = alert.addButton(withTitle: L("Non salvare"))
+        discard.keyEquivalent = "d"
+        discard.keyEquivalentModifierMask = .command
+        let cancel = alert.addButton(withTitle: L("Annulla"))
+        cancel.keyEquivalent = "\u{1b}"
+        alert.beginSheetModal(for: sender) { [weak self] response in
+            switch response {
+            case .alertFirstButtonReturn: self?.saveAndClose()
+            case .alertSecondButtonReturn: self?.discardAndClose()
+            default: break
+            }
+        }
+        return false
+    }
+
+    /// Salva le pagine con modifiche; se un salvataggio non riesce la finestra resta aperta
+    /// sulla pagina dell'errore.
+    private func saveAndClose() {
+        if model.dirty {
+            do {
+                try model.save()
+                ui.keysError = nil
+            } catch {
+                ui.keysError = error.localizedDescription
+                nav.tab = .keys
+                return
+            }
+        }
+        guard models.dirty else { window?.close(); return }
+        ui.modelsSaving = true
+        Task {
+            do {
+                try await models.save()
+                ui.modelsError = nil
+                ui.modelsSaving = false
+                window?.close()
+            } catch {
+                ui.modelsError = error.localizedDescription
+                ui.modelsSaving = false
+                nav.tab = .models
+            }
+        }
+    }
+
+    private func discardAndClose() {
+        model.reload()
+        models.dirty = false   // alla prossima apertura show() ricarica i modelli dal motore
+        window?.close()        // close() non ripassa da windowShouldClose
+    }
+
     /// Il motore è (ri)partito: se le Impostazioni sono aperte si ricaricano i modelli,
     /// così "Motore non pronto" non resta a schermo dopo l'avvio.
     func engineStarted() {
@@ -1040,6 +1133,7 @@ final class SettingsWindowController {
         // Minimizzata conta come aperta: le modifiche non salvate sono ancora lì.
         if window?.isVisible != true && window?.isMiniaturized != true {
             model.reload()
+            ui.reset()
             Task { await models.load() }
         }
         window?.makeKeyAndOrderFront(nil)

@@ -433,10 +433,8 @@ struct NativeSearchField: NSViewRepresentable {
 
 struct ModelsTab: View {
     @ObservedObject var model: ModelsModel
+    @ObservedObject var ui: SettingsPageState
     var close: () -> Void
-    @State private var saveError: String?
-    @State private var saving = false
-    @State private var expanded: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -458,21 +456,22 @@ struct ModelsTab: View {
             SettingsBar {
                 let n = model.selection.models.count
                 Text(n == 1 ? L("1 voce nel consiglio") : String(format: L("%d voci nel consiglio"), n)).foregroundStyle(.secondary)
-                if let saveError {
+                if let saveError = ui.modelsError {
                     Text(saveError).foregroundStyle(Brand.danger).lineLimit(1).textSelection(.enabled)
                 }
                 Spacer()
                 // Senza Esc: nel campo di ricerca Esc deve solo svuotarlo.
-                Button("Annulla") { Task { await model.load() }; close() }
-                Button(saving ? L("Salvataggio…") : L("Salva e attiva")) {
-                    saving = true
+                // dirty = false subito: la chiusura non deve chiedere di salvare ciò che si annulla.
+                Button("Annulla") { model.dirty = false; Task { await model.load() }; close() }
+                Button(ui.modelsSaving ? L("Salvataggio…") : L("Salva e attiva")) {
+                    ui.modelsSaving = true
                     Task {
-                        do { try await model.save(); close() } catch { saveError = error.localizedDescription }
-                        saving = false
+                        do { try await model.save(); ui.modelsError = nil; close() } catch { ui.modelsError = error.localizedDescription }
+                        ui.modelsSaving = false
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!model.dirty || saving)
+                .disabled(!model.dirty || ui.modelsSaving)
             }
         }
     }
@@ -677,10 +676,10 @@ struct ModelsTab: View {
             }
             DisclosureGroup(f.items.count == 1 ? L("Mostra il modello") : String(format: L("Mostra i %d modelli"), f.items.count),
                             isExpanded: Binding(
-                get: { expanded.contains("\(model.provider)/\(f.id)") },
+                get: { ui.modelsExpanded.contains("\(model.provider)/\(f.id)") },
                 set: { on in
                     let k = "\(model.provider)/\(f.id)"
-                    if on { expanded.insert(k) } else { expanded.remove(k) }
+                    if on { ui.modelsExpanded.insert(k) } else { ui.modelsExpanded.remove(k) }
                 })) {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(f.items) { item in variantRow(item) }

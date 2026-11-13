@@ -421,3 +421,7 @@
 "Scarica" = "Download";
 "Più tardi" = "Later";
 "Salta questa versione" = "Skip This Version";
+"Vuoi salvare le modifiche alle Impostazioni?" = "Do you want to save the changes to Settings?";
+"Se non le salvi, le modifiche andranno perse." = "Your changes will be lost if you don't save them.";
+"Salva" = "Save";
+"Non salvare" = "Don't Save";
