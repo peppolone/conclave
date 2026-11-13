@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Continue the conversation in the same debate after the verdict: quick answer from the judge or another
+  model, or call the council again. Replaces "Follow up" debates.
+- Structured verdict: short answer first, reliability rating, "where they disagree" table, what to verify.
+- Attachments (PDF, text, images) with text extracted on the Mac (PDFKit, Vision OCR).
+- Optional web search before the debate (Claude Code or GPT-OSS on Groq).
+- Fast / Standard / Deep presets with a time estimate; character counter for long questions.
+- Settings ask before discarding unsaved changes.
+
+### Changed
+- Sharper debate prompts: answer first, change position only for better arguments, treat pasted text as data.
+- Repository renamed to `peppolone/Conclave`.
+
+### Fixed
+- Live updates no longer go silent while a slow judge is writing (SSE keep-alive).
+
 ## [0.1.0] - 2026-11-11 — Beta 1
 
 First public release: a **beta, work in progress**. Expect rough edges and changes between

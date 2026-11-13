@@ -37,8 +37,16 @@ fallbacks when a free model is slow or retired, and no server to run.
 - **One voice per model family** (Gemini, GPT-OSS, Qwen, …): the engine picks the best variant that
   answers and falls back to the next one if it is slow, rate-limited or retired.
 - **Retired models are replaced automatically** with the best match from the provider's catalog.
-- **Follow-up questions** on a finished debate, history searchable by question, title and verdict
-  (case- and accent-insensitive), Markdown export.
+- **A verdict you can act on**: the short answer first, a reliability rating, a table of where the models
+  disagree (and who changed their mind), what to double-check and why.
+- **Keep chatting in the same conversation** after the verdict: a quick answer from the judge or any model,
+  or call the whole council again on the new question.
+- **Attachments**: PDFs, text and code files, images (text extracted on your Mac with PDFKit and Vision OCR,
+  so every model can read them).
+- **Web search** before the debate: Claude (with your subscription) or GPT-OSS on Groq gathers sources that
+  every member then works from.
+- **Fast, Standard or Deep** debates, with an estimate of calls and time.
+- History searchable by question, title and verdict (case- and accent-insensitive), Markdown export.
 - **Native interface** (AppKit + SwiftUI, Liquid Glass), light and dark mode, Italian and English UI.
   Models answer in the language of the question.
 - **Works with free tiers** (Gemini AI Studio, Groq, OpenRouter `:free` models, Mistral, Cerebras)
